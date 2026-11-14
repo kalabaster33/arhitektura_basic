@@ -7,7 +7,21 @@
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": [
+      "node",
+      "vite/client"
+    ],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "jsx": "react-jsx",
+    "resolveJsonModule": true
   },
-  "include": ["src", "demo"]
+  "include": [
+    "src",
+    "demo",
+    "vite.config.ts"
+  ]
 }

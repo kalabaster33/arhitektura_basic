@@ -1,0 +1,197 @@
+/**
+ * Plane geometry used by the plan model. Pure functions, no UI imports.
+ * Units are metres. A ring is a closed loop without a repeated last vertex.
+ *
+ * Orientation convention: a ring with positive signed area has its interior on
+ * the left of every edge, where "left" of a direction (ux, uy) is (-uy, ux).
+ * This is purely algebraic, so it holds whichever way the y axis is drawn.
+ */
+
+export interface Pt {
+  x: number;
+  y: number;
+}
+
+/** Two points closer than this are the same wall node (1 mm). */
+export const NODE_TOL = 1e-3;
+
+/** Rounds to a multiple of `step`, cleaned of binary noise (3.2 stays 3.2). */
+export function roundTo(v: number, step: number): number {
+  if (!(step > 0)) return v;
+  return Math.round(Math.round(v / step) * step * 1e6) / 1e6;
+}
+
+export function snapPoint(p: Pt, step: number): Pt {
+  return { x: roundTo(p.x, step), y: roundTo(p.y, step) };
+}
+
+export function dist(a: Pt, b: Pt): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+export function samePoint(a: Pt, b: Pt, tol = NODE_TOL): boolean {
+  return dist(a, b) <= tol;
+}
+
+export function lerp(a: Pt, b: Pt, t: number): Pt {
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+}
+
+/** Shoelace formula. Positive when the interior is on the left of the edges. */
+export function ringSignedArea(ring: Pt[]): number {
+  let s = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i];
+    const b = ring[(i + 1) % ring.length];
+    s += a.x * b.y - b.x * a.y;
+  }
+  return s / 2;
+}
+
+/** Area of a polygon with holes; the winding of the rings does not matter. */
+export function polygonArea(outer: Pt[], holes: Pt[][] = []): number {
+  let area = Math.abs(ringSignedArea(outer));
+  for (const hole of holes) area -= Math.abs(ringSignedArea(hole));
+  return Math.max(0, area);
+}
+
+/** Even-odd test, so a ring that runs along a wall stub and back still works. */
+export function pointInRing(p: Pt, ring: Pt[]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const a = ring[i];
+    const b = ring[j];
+    if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+export function pointInPolygon(p: Pt, outer: Pt[], holes: Pt[][] = []): boolean {
+  if (!pointInRing(p, outer)) return false;
+  return !holes.some((hole) => pointInRing(p, hole));
+}
+
+/** Parameter of the projection of p on the line a-b (0 at a, 1 at b), unclamped. */
+export function projectParam(p: Pt, a: Pt, b: Pt): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  return len2 === 0 ? 0 : ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+}
+
+export function distToSegment(p: Pt, a: Pt, b: Pt): number {
+  const t = Math.max(0, Math.min(1, projectParam(p, a, b)));
+  return dist(p, lerp(a, b, t));
+}
+
+/**
+ * Where the lines a-b and c-d cross, as parameters along each (t on a-b, u on
+ * c-d). Null when they are parallel. The caller decides which range counts.
+ */
+export function lineIntersectionParams(
+  a: Pt,
+  b: Pt,
+  c: Pt,
+  d: Pt,
+): { t: number; u: number } | null {
+  const rx = b.x - a.x;
+  const ry = b.y - a.y;
+  const sx = d.x - c.x;
+  const sy = d.y - c.y;
+  const cross = rx * sy - ry * sx;
+  if (Math.abs(cross) < 1e-12) return null;
+  const qx = c.x - a.x;
+  const qy = c.y - a.y;
+  return { t: (qx * sy - qy * sx) / cross, u: (qx * ry - qy * rx) / cross };
+}
+
+/**
+ * Moves every edge of a ring to its left by its own distance and rejoins the
+ * edges with mitred corners. Edge i runs ring[i] -> ring[i + 1] and is moved by
+ * d[i].
+ *
+ * For a room boundary (positive area) this shrinks the ring from the wall
+ * centrelines to the inner wall faces; for the outside of a group of walls
+ * (negative area) it grows the ring to the outer wall faces. Where the ring
+ * runs along a free-standing wall end and back, the end gets a square cap.
+ */
+export function offsetRingLeft(ring: Pt[], d: number[], miterLimit = 4): Pt[] {
+  const n = ring.length;
+  const out: Pt[] = [];
+  if (n < 2) return out;
+  for (let i = 0; i < n; i++) {
+    const p = ring[i];
+    const prev = ring[(i + n - 1) % n];
+    const next = ring[(i + 1) % n];
+    const d1 = d[(i + n - 1) % n];
+    const d2 = d[i];
+    const l1 = dist(prev, p);
+    const l2 = dist(p, next);
+    if (l1 === 0 || l2 === 0) continue;
+    const u1 = { x: (p.x - prev.x) / l1, y: (p.y - prev.y) / l1 };
+    const u2 = { x: (next.x - p.x) / l2, y: (next.y - p.y) / l2 };
+    const a = { x: p.x - u1.y * d1, y: p.y + u1.x * d1 };
+    const b = { x: p.x - u2.y * d2, y: p.y + u2.x * d2 };
+    const cross = u1.x * u2.y - u1.y * u2.x;
+    const dot = u1.x * u2.x + u1.y * u2.y;
+    if (Math.abs(cross) < 1e-9) {
+      if (dot > 0) {
+        // Straight on: a step only if the two walls differ in thickness.
+        out.push(a);
+        if (Math.abs(d1 - d2) > 1e-9) out.push(b);
+      } else {
+        // U-turn at a free wall end: square cap.
+        out.push({ x: a.x + u1.x * d1, y: a.y + u1.y * d1 });
+        out.push({ x: b.x + u1.x * d1, y: b.y + u1.y * d1 });
+      }
+      continue;
+    }
+    const s = ((b.x - a.x) * u2.y - (b.y - a.y) * u2.x) / cross;
+    if (Math.abs(s) > miterLimit * Math.max(d1, d2, 1e-9)) {
+      out.push(a, b); // very sharp corner: bevel instead of a long spike
+    } else {
+      out.push({ x: a.x + u1.x * s, y: a.y + u1.y * s });
+    }
+  }
+  return out;
+}
+
+/**
+ * A point safely inside a polygon with holes (for labels and for re-finding a
+ * room after its walls move): the middle of the widest horizontal span over a
+ * handful of scanlines.
+ */
+export function interiorPoint(outer: Pt[], holes: Pt[][] = []): Pt {
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const p of outer) {
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  }
+  const rings = [outer, ...holes];
+  let best: Pt = outer[0] ?? { x: 0, y: 0 };
+  let bestWidth = -1;
+  for (const f of [0.5, 0.35, 0.65, 0.2, 0.8]) {
+    // The irrational nudge keeps the scanline off vertices on a snapped grid.
+    const y = minY + (maxY - minY) * f + 1.2345e-7;
+    const xs: number[] = [];
+    for (const ring of rings) {
+      for (let i = 0; i < ring.length; i++) {
+        const a = ring[i];
+        const b = ring[(i + 1) % ring.length];
+        if (a.y > y !== b.y > y) xs.push(a.x + ((y - a.y) / (b.y - a.y)) * (b.x - a.x));
+      }
+    }
+    xs.sort((p, q) => p - q);
+    for (let i = 0; i + 1 < xs.length; i += 2) {
+      const width = xs[i + 1] - xs[i];
+      if (width > bestWidth) {
+        bestWidth = width;
+        best = { x: (xs[i] + xs[i + 1]) / 2, y };
+      }
+    }
+  }
+  return best;
+}

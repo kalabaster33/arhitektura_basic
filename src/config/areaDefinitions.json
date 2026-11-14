@@ -1,0 +1,32 @@
+{
+  "_status": "TO BE VERIFIED BY A LICENSED ENGINEER. These definitions are neutral placeholders, not taken from any standard or building code. Check them against the standard that applies to the project before any figure is used.",
+  "version": 1,
+  "decimals": 2,
+  "net": {
+    "_doc": "Floor area of a space. boundary: 'wallInnerFace' measures to the inside face of the surrounding walls; 'wallCentreline' measures to the wall centrelines.",
+    "boundary": "wallInnerFace"
+  },
+  "useful": {
+    "_doc": "Useful area of a space = its net area x the factor for its space type. Every factor is 1 (useful = net) until the correct reduction factors are entered here. TO BE VERIFIED BY A LICENSED ENGINEER.",
+    "defaultFactor": 1,
+    "factorBySpaceType": {
+      "room": 1,
+      "living": 1,
+      "bedroom": 1,
+      "kitchen": 1,
+      "bathroom": 1,
+      "corridor": 1,
+      "storage": 1,
+      "balcony": 1,
+      "stair": 1,
+      "elevator": 1,
+      "shaft": 1,
+      "other": 1
+    }
+  },
+  "gross": {
+    "_doc": "space: gross area attributed to one space, 'wallCentreline' (net plus half of each surrounding wall) or 'wallInnerFace' (same as net). storey: gross area of the whole storey, 'wallOuterFace' (to the outside face of the outermost walls) or 'wallCentreline'.",
+    "space": "wallCentreline",
+    "storey": "wallOuterFace"
+  }
+}

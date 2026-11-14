@@ -1,0 +1,9 @@
+{
+  "_doc": "Starting values for the editor. Drawing conveniences only, not design rules.",
+  "snapStep": 0.05,
+  "wallThickness": {
+    "exterior": 0.25,
+    "interior": 0.1
+  },
+  "storeyHeight": 3
+}
