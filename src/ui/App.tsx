@@ -4,6 +4,7 @@ import coreAlignment from "../config/coreAlignment.json";
 import editorDefaults from "../config/editorDefaults.json";
 import layoutRules from "../config/layoutRules.json";
 import roomChecks from "../config/roomChecks.json";
+import siteRulesJson from "../config/siteRules.json";
 import { describeApartments } from "../core/apartments.ts";
 import {
   type LayoutProposal,
@@ -32,7 +33,7 @@ import {
 import { checkCoreAlignment, coreOutlines, parseCoreConfig } from "../core/coreAlignment.ts";
 import { checkBuildingPlan, parseRoomCheckConfig } from "../core/checks.ts";
 import { deleteWall } from "../core/edit.ts";
-import type { Storey, WallKind } from "../core/model.ts";
+import type { Project, Storey, WallKind } from "../core/model.ts";
 import { deleteOpening } from "../core/openings.ts";
 import {
   createProject,
@@ -41,6 +42,7 @@ import {
   replaceStorey,
   serializeProject,
 } from "../core/project.ts";
+import { analyseSite, deleteBoundaryCorner, parseSiteRules, setBoundary } from "../core/site.ts";
 import { linkSpaces } from "../core/spaces.ts";
 import {
   type ApartmentTag,
@@ -55,6 +57,7 @@ import {
   LengthField,
   PlanChecksPanel,
   PropertiesPanel,
+  SitePanel,
   StoreysPanel,
   WarningsPanel,
 } from "./Sidebar.tsx";
@@ -64,6 +67,7 @@ const areaConfig = parseAreaConfig(areaDefinitions);
 const coreConfig = parseCoreConfig(coreAlignment);
 const roomCheckConfig = parseRoomCheckConfig(roomChecks);
 const layoutRuleSet = parseLayoutRules(layoutRules);
+const siteRules = parseSiteRules(siteRulesJson);
 
 /** Generated layouts being looked at before one is applied. */
 interface LayoutPreview {
@@ -90,6 +94,7 @@ const TOOLS: { tool: Tool; label: string; title: string }[] = [
   { tool: "wall", label: "Wall", title: "Draw walls (W)" },
   { tool: "door", label: "Door", title: "Place doors on walls (D)" },
   { tool: "window", label: "Window", title: "Place windows on walls (N)" },
+  { tool: "site", label: "Site", title: "Draw the plot, set setbacks and move the building (S)" },
 ];
 
 const STATUS: Record<Tool, string> = {
@@ -98,6 +103,7 @@ const STATUS: Record<Tool, string> = {
   wall: "Click to place wall ends · Shift keeps it straight · Esc or right-click ends the run",
   door: "Move over a wall and click to place a door · it snaps to where it fits",
   window: "Move over a wall and click to place a window · it snaps to where it fits",
+  site: "Click an edge for its setback · drag a corner to reshape the plot · drag the building to move it · drag empty space to pan",
 };
 
 export function App() {
@@ -136,6 +142,14 @@ export function App() {
     });
     return tags;
   }, [storey.apartments]);
+
+  // The site is checked against the real project: a previewed layout only adds partitions.
+  const siteAnalysis = useMemo(() => analyseSite(project.site, siteRules, areaConfig), [project.site]);
+  const hasPlot = project.site.boundary.length >= 3;
+  const setProject = (next: Project, record = true) => {
+    if (previewing || next === project) return;
+    store.set(next, record);
+  };
 
   const storeys = useMemo(() => sortedStoreys(building), [building]);
   const buildingAreas = useMemo(() => computeBuildingAreas(building, areaConfig), [building]);
@@ -260,13 +274,13 @@ export function App() {
   };
 
   // Latest values for the keyboard handler, which is attached once.
-  const live = useRef({ store, storey, selection, setStorey });
-  live.current = { store, storey, selection, setStorey };
+  const live = useRef({ store, storey, selection, setStorey, project, setProject });
+  live.current = { store, storey, selection, setStorey, project, setProject };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName)) return;
-      const { store, storey, selection, setStorey } = live.current;
+      const { store, storey, selection, setStorey, project, setProject } = live.current;
       const mod = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
       if (mod && key === "z") {
@@ -279,6 +293,12 @@ export function App() {
       else if (!mod && key === "w") setTool("wall");
       else if (!mod && key === "d") setTool("door");
       else if (!mod && key === "n") setTool("window");
+      else if (!mod && key === "s") setTool("site");
+      else if ((e.key === "Delete" || e.key === "Backspace") && selection?.kind === "siteCorner") {
+        e.preventDefault();
+        setProject(deleteBoundaryCorner(project, selection.index));
+        setSelection(null);
+      }
       else if (e.key === "Escape") {
         setSelection(null);
         setPreview(null);
@@ -447,6 +467,19 @@ export function App() {
             flaggedSpaceIds={flaggedSpaceIds}
             openingSize={editorDefaults.openings}
             apartmentBySpaceId={apartmentBySpaceId}
+            project={project}
+            buildingId={building.id}
+            site={siteAnalysis}
+            onPlotDrawn={(corners) => {
+              setProject(
+                setBoundary(project, corners, siteRules.defaultSetback, {
+                  maxCoverage: siteRules.maxCoverage,
+                  maxFloorAreaRatio: siteRules.maxFloorAreaRatio,
+                }),
+              );
+              setSelection(null);
+            }}
+            onProjectChange={setProject}
             onChange={setStorey}
             onSelect={setSelection}
           />
@@ -454,7 +487,9 @@ export function App() {
             <strong>{storey.name}</strong> ·{" "}
             {previewing
               ? "Previewing a generated layout · nothing is changed until you press Apply · Esc cancels"
-              : STATUS[tool]}
+              : tool === "site" && !hasPlot
+                ? "Click the corners of the plot · click the first corner again or press Enter to close it · Esc starts again"
+                : STATUS[tool]}
           </p>
         </div>
         <aside className="sidebar">
@@ -491,6 +526,18 @@ export function App() {
               setSelection({ kind: "space", id: issue.spaceId });
             }}
             onOpenStorey={openStorey}
+          />
+          <SitePanel
+            project={project}
+            buildingId={building.id}
+            analysis={siteAnalysis}
+            rules={siteRules}
+            config={areaConfig}
+            siteToolActive={tool === "site"}
+            selection={selection}
+            onChange={(p) => setProject(p)}
+            onSelect={setSelection}
+            onUseSiteTool={() => setTool("site")}
           />
           <PlanChecksPanel
             storey={storey}

@@ -1,0 +1,8 @@
+{
+  "_status": "TO BE VERIFIED BY A LICENSED ENGINEER. These values are neutral starting values, not taken from any urban plan, standard or building code. The setbacks and limits that apply to a plot come from its planning conditions and must be entered per project.",
+  "_doc": "defaultSetback: the setback (metres) every edge of a newly drawn plot starts with. maxCoverage: starting limit for site coverage as a share of the plot (0.4 = 40 %), or null for no limit. maxFloorAreaRatio: starting limit for the floor area ratio (total gross floor area of all storeys divided by plot area), or null for no limit. The two limits are copied into a project when its plot is drawn and are then edited in the Site panel. footprint: which storeys make up the building footprint used for coverage and for the setback check, 'allStoreys' (everything seen from above, so an overhanging upper floor counts) or 'lowestStorey' (the lowest storey of each building only). The footprint is measured to the outside wall faces. Which storeys count toward the floor area ratio is not decided here: every storey counts, with the storey gross area from areaDefinitions.json.",
+  "defaultSetback": 3,
+  "maxCoverage": null,
+  "maxFloorAreaRatio": null,
+  "footprint": "allStoreys"
+}

@@ -15,7 +15,7 @@ import {
   type StoreyAreasByApartment,
   formatArea,
 } from "../core/areas.ts";
-import type { ElevationIssue } from "../core/building.ts";
+import { type ElevationIssue, moveBuilding } from "../core/building.ts";
 import type { PlanIssue } from "../core/checks.ts";
 import type { CoreIssue } from "../core/coreAlignment.ts";
 import { moveNode, setWallKind, setWallLength, setWallThickness, updateSpace } from "../core/edit.ts";
@@ -23,12 +23,24 @@ import { type Pt, dist } from "../core/geometry.ts";
 import {
   type Opening,
   type OpeningKind,
+  type Project,
   type SpaceType,
   type Storey,
   type Wall,
   SPACE_TYPES,
 } from "../core/model.ts";
 import { deleteOpening, moveOpening, updateOpening } from "../core/openings.ts";
+import {
+  type SiteAnalysis,
+  type SiteIssue,
+  type SiteRules,
+  clearBoundary,
+  deleteBoundaryCorner,
+  insertBoundaryCorner,
+  moveBoundaryCorner,
+  setSetback,
+  setSiteLimits,
+} from "../core/site.ts";
 import { parseLength } from "../core/units.ts";
 import type { Selection } from "./PlanCanvas.tsx";
 
@@ -682,6 +694,314 @@ export function WarningsPanel(props: {
         Dashed outlines on the plan are the core of the floors above and below: green where it
         lines up, red where it does not. Tolerance {props.tolerance.toFixed(2)} m
         (src/config/coreAlignment.json, to be verified by a licensed engineer).
+      </p>
+    </section>
+  );
+}
+
+/**
+ * Text field for a number that may be left empty. Accepts a decimal comma;
+ * commits on Enter or when focus leaves, and turns red instead of committing
+ * nonsense.
+ */
+function OptionalNumberField(props: {
+  label: string;
+  value: number | null;
+  unit?: string;
+  decimals: number;
+  placeholder: string;
+  onCommit: (value: number | null) => void;
+}) {
+  const shown = props.value === null ? "" : props.value.toFixed(props.decimals);
+  const [text, setText] = useState(shown);
+  const [invalid, setInvalid] = useState(false);
+  useEffect(() => {
+    setText(shown);
+    setInvalid(false);
+  }, [shown]);
+
+  const commit = () => {
+    const trimmed = text.trim();
+    const value = trimmed === "" ? null : Number(trimmed.replace(",", "."));
+    if (value !== null && !(Number.isFinite(value) && value > 0)) {
+      setInvalid(true);
+      return;
+    }
+    setInvalid(false);
+    if (trimmed !== shown) props.onCommit(value);
+  };
+
+  return (
+    <label className="field">
+      <span>{props.label}</span>
+      <span className="field__input">
+        <input
+          value={text}
+          placeholder={props.placeholder}
+          className={invalid ? "is-invalid" : ""}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            if (e.key === "Escape") {
+              setText(shown);
+              setInvalid(false);
+            }
+          }}
+        />
+        {props.unit && <em>{props.unit}</em>}
+      </span>
+    </label>
+  );
+}
+
+/** Two distances and a button: shifts the whole building by what was typed. */
+function MoveBuildingForm(props: { onMove: (delta: Pt) => void }) {
+  const [dx, setDx] = useState("0");
+  const [dy, setDy] = useState("0");
+  const x = parseLength(dx);
+  const y = parseLength(dy);
+  const ready = x !== null && y !== null && (x !== 0 || y !== 0);
+  const move = () => {
+    if (x !== null && y !== null && ready) props.onMove({ x, y });
+  };
+  const field = (label: string, text: string, set: (v: string) => void, bad: boolean) => (
+    <label className="field">
+      <span>{label}</span>
+      <span className="field__input">
+        <input
+          value={text}
+          className={bad ? "is-invalid" : ""}
+          onChange={(e) => set(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") move();
+          }}
+        />
+        <em>m</em>
+      </span>
+    </label>
+  );
+  return (
+    <>
+      <div className="field-grid">
+        {field("Move by x", dx, setDx, x === null)}
+        {field("Move by y", dy, setDy, y === null)}
+      </div>
+      <button disabled={!ready} onClick={move}>
+        Move building
+      </button>
+    </>
+  );
+}
+
+export function SitePanel(props: {
+  project: Project;
+  buildingId: string;
+  analysis: SiteAnalysis;
+  rules: SiteRules;
+  config: AreaConfig;
+  siteToolActive: boolean;
+  selection: Selection;
+  onChange: (project: Project) => void;
+  onSelect: (s: Selection) => void;
+  onUseSiteTool: () => void;
+}) {
+  const { project, analysis: a, selection, onChange } = props;
+  const { boundary, setbacks, limits } = project.site;
+  const f = (v: number) => formatArea(v, props.config);
+  const bad = (kind: SiteIssue["kind"]) => a.issues.some((i) => i.kind === kind);
+  const edge = selection?.kind === "siteEdge" && boundary[selection.index] ? selection.index : null;
+  const corner = selection?.kind === "siteCorner" && boundary[selection.index] ? selection.index : null;
+  const count = a.issues.length;
+  return (
+    <section className="panel">
+      <h2>
+        Site{" "}
+        <small>
+          {!a.hasPlot ? "no plot yet" : count === 0 ? "no warnings" : `${count} warning${count > 1 ? "s" : ""}`}
+        </small>
+      </h2>
+      {count > 0 && (
+        <ul className="warnings">
+          {a.issues.map((issue) => (
+            <li key={issue.kind}>
+              <button onClick={props.onUseSiteTool}>{issue.message}</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {a.hasPlot && count === 0 && <p className="ok">The building is inside the setbacks and the limits.</p>}
+      {!a.hasPlot && (
+        <p className="hint">
+          {props.siteToolActive
+            ? "Click the corners of the plot on the plan. Click the first corner again, or press Enter, to close it."
+            : "No plot is drawn. Choose the Site tool and click the corners of the plot on the plan."}
+        </p>
+      )}
+      <table className="figures">
+        <tbody>
+          {a.hasPlot && (
+            <>
+              <tr>
+                <th>Plot area</th>
+                <td>{f(a.plotArea)} m²</td>
+              </tr>
+              <tr>
+                <th>Buildable area</th>
+                <td>{f(a.buildableArea)} m²</td>
+              </tr>
+            </>
+          )}
+          <tr>
+            <th>Building footprint</th>
+            <td>{f(a.footprintArea)} m²</td>
+          </tr>
+          {a.coverage !== null && (
+            <tr>
+              <th>Site coverage</th>
+              <td className={bad("coverage") ? "is-bad" : ""}>
+                {(a.coverage * 100).toFixed(1)} %
+                {limits.maxCoverage !== null && <small>max {(limits.maxCoverage * 100).toFixed(1)} %</small>}
+              </td>
+            </tr>
+          )}
+          <tr>
+            <th>Gross floor area</th>
+            <td>{f(a.grossFloorArea)} m²</td>
+          </tr>
+          {a.floorAreaRatio !== null && (
+            <tr>
+              <th>Floor area ratio</th>
+              <td className={bad("floorAreaRatio") ? "is-bad" : ""}>
+                {a.floorAreaRatio.toFixed(2)}
+                {limits.maxFloorAreaRatio !== null && <small>max {limits.maxFloorAreaRatio.toFixed(2)}</small>}
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+
+      {a.hasPlot && (
+        <>
+          <div className="field-grid">
+            <OptionalNumberField
+              label="Max coverage"
+              unit="%"
+              decimals={1}
+              placeholder="no limit"
+              value={limits.maxCoverage === null ? null : limits.maxCoverage * 100}
+              onCommit={(v) => onChange(setSiteLimits(project, { maxCoverage: v === null ? null : v / 100 }))}
+            />
+            <OptionalNumberField
+              label="Max floor area ratio"
+              decimals={2}
+              placeholder="no limit"
+              value={limits.maxFloorAreaRatio}
+              onCommit={(v) => onChange(setSiteLimits(project, { maxFloorAreaRatio: v }))}
+            />
+          </div>
+
+          {edge !== null && (
+            <>
+              <h3>
+                Edge {edge + 1} · {dist(boundary[edge], boundary[(edge + 1) % boundary.length]).toFixed(2)} m long
+              </h3>
+              <LengthField
+                label="Setback"
+                value={setbacks[edge] ?? 0}
+                min={0}
+                onCommit={(v) => onChange(setSetback(project, edge, v))}
+              />
+              <div className="button-row">
+                <button
+                  title="Give every edge of the plot this setback"
+                  onClick={() => {
+                    let next = project;
+                    boundary.forEach((_, i) => (next = setSetback(next, i, setbacks[edge] ?? 0)));
+                    onChange(next);
+                  }}
+                >
+                  Use for all edges
+                </button>
+                <button
+                  title="Add a corner in the middle of this edge"
+                  onClick={() => {
+                    onChange(insertBoundaryCorner(project, edge));
+                    props.onSelect({ kind: "siteCorner", index: edge + 1 });
+                  }}
+                >
+                  Add corner
+                </button>
+              </div>
+            </>
+          )}
+
+          {corner !== null && (
+            <>
+              <h3>Corner {corner + 1}</h3>
+              <div className="field-grid">
+                <LengthField
+                  label="x"
+                  value={boundary[corner].x}
+                  onCommit={(v) => onChange(moveBoundaryCorner(project, corner, { ...boundary[corner], x: v }))}
+                />
+                <LengthField
+                  label="y"
+                  value={boundary[corner].y}
+                  onCommit={(v) => onChange(moveBoundaryCorner(project, corner, { ...boundary[corner], y: v }))}
+                />
+              </div>
+              <div className="button-row">
+                <button
+                  disabled={deleteBoundaryCorner(project, corner) === project}
+                  title="Remove this corner; its two edges become one"
+                  onClick={() => {
+                    onChange(deleteBoundaryCorner(project, corner));
+                    props.onSelect(null);
+                  }}
+                >
+                  Delete corner
+                </button>
+              </div>
+            </>
+          )}
+
+          {edge === null && corner === null && (
+            <p className="hint">
+              {props.siteToolActive
+                ? "Click an edge to set its setback, or a corner to type its position. Drag a corner to reshape the plot; drag the building to move it."
+                : "Choose the Site tool to change the plot, its setbacks or the position of the building."}
+            </p>
+          )}
+
+          <h3>Position of the building</h3>
+          <MoveBuildingForm onMove={(delta) => onChange(moveBuilding(project, props.buildingId, delta))} />
+
+          <div className="button-row site-delete">
+            <button
+              onClick={() => {
+                if (!window.confirm("Delete the plot outline and its setbacks? Undo brings them back.")) return;
+                onChange(clearBoundary(project));
+                props.onSelect(null);
+              }}
+            >
+              Delete plot
+            </button>
+          </div>
+        </>
+      )}
+
+      <p className="hint">
+        Dashed green line: the buildable area, the plot less the setback of each edge. Dotted
+        outline: the building footprint to the outside wall faces,{" "}
+        {props.rules.footprint === "allStoreys" ? "all storeys seen from above" : "lowest storey only"}.
+        Coverage: footprint ÷ plot area. Floor area ratio: gross floor area of all storeys ÷ plot
+        area.
+      </p>
+      <p className="hint hint--warn">
+        Setbacks and limits come from the planning conditions of the plot. The starting values and
+        the footprint definition are placeholders — to be verified by a licensed engineer
+        (src/config/siteRules.json).
       </p>
     </section>
   );

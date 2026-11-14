@@ -692,3 +692,221 @@ input.is-invalid {
   align-items: flex-start;
   gap: 4px;
 }
+
+/* ------------------------------------------------------------------- site */
+
+.plan--site {
+  cursor: crosshair;
+}
+
+.plot-fill {
+  fill: rgba(92, 122, 62, 0.07);
+}
+
+.site__plot {
+  fill: none;
+  stroke: #4d6b2f;
+  stroke-linejoin: round;
+}
+
+.site__plot--draft {
+  opacity: 0.7;
+}
+
+.site__buildable {
+  fill: none;
+  stroke: #4d6b2f;
+}
+
+.site__footprint {
+  fill: transparent;
+  stroke: #7b5ea7;
+}
+
+.site.is-active .site__footprint {
+  cursor: move;
+}
+
+.site__violation {
+  fill: rgba(179, 38, 30, 0.32);
+  stroke: var(--danger);
+}
+
+.site__edge-hit {
+  stroke: transparent;
+  cursor: pointer;
+}
+
+.site__edge-selected {
+  stroke: var(--accent);
+  stroke-linecap: round;
+}
+
+.site__setback {
+  text-anchor: middle;
+  dominant-baseline: middle;
+  fill: #4d6b2f;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  paint-order: stroke;
+  stroke: #fbfaf7;
+  stroke-width: 0.06px;
+}
+
+.handle.is-selected {
+  fill: var(--accent);
+}
+
+.plan-overlay .plan-overlay__error {
+  fill: var(--danger);
+  font-weight: 600;
+}
+
+.figures {
+  width: 100%;
+  margin-bottom: 10px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.figures th {
+  padding: 3px 0;
+  font-weight: 400;
+  text-align: left;
+}
+
+.figures td {
+  padding: 3px 0;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.figures small {
+  margin-left: 6px;
+  color: var(--muted);
+}
+
+.figures .is-bad {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.panel h3 {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.warnings + .figures,
+.figures + .warnings {
+  margin-top: 8px;
+}
+
+/* ------------------------------------------------------------------- site */
+
+.plan--site {
+  cursor: crosshair;
+}
+
+.plot-fill {
+  fill: rgba(92, 122, 62, 0.07);
+}
+
+.site__plot {
+  fill: none;
+  stroke: #4d6b2f;
+  stroke-linejoin: round;
+}
+
+.site__plot--draft {
+  opacity: 0.7;
+}
+
+.site__buildable {
+  fill: none;
+  stroke: #4d6b2f;
+}
+
+.site__footprint {
+  fill: transparent;
+  stroke: #7b5ea7;
+}
+
+.site.is-active .site__footprint {
+  cursor: move;
+}
+
+.site__violation {
+  fill: rgba(179, 38, 30, 0.32);
+  stroke: var(--danger);
+}
+
+.site__edge-hit {
+  stroke: transparent;
+  cursor: pointer;
+}
+
+.site__edge-selected {
+  stroke: var(--accent);
+  stroke-linecap: round;
+}
+
+.site__setback {
+  text-anchor: middle;
+  dominant-baseline: middle;
+  fill: #4d6b2f;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  paint-order: stroke;
+  stroke: #fbfaf7;
+  stroke-width: 0.06px;
+}
+
+.handle.is-selected {
+  fill: var(--accent);
+}
+
+.plan-overlay .plan-overlay__error {
+  fill: var(--danger);
+  font-weight: 600;
+}
+
+.figures {
+  width: 100%;
+  margin: 8px 0 10px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.figures th {
+  padding: 3px 0;
+  font-weight: 400;
+  text-align: left;
+}
+
+.figures td {
+  padding: 3px 0;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.figures small {
+  margin-left: 6px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.figures .is-bad {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.panel h3 {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.site-delete {
+  margin: 12px 0 0;
+}

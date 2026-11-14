@@ -2,6 +2,7 @@
  * Storeys of a building: adding, copying, deleting, and keeping their
  * elevations consistent. Pure functions on the project, no UI imports.
  */
+import type { Pt } from "./geometry.ts";
 import { newId } from "./ids.ts";
 import type { Building, Project, Storey } from "./model.ts";
 
@@ -155,6 +156,25 @@ export function restackStoreys(project: Project, buildingId: string): Project {
   return replaceBuilding(project, {
     ...building,
     storeys: building.storeys.map((s) => ({ ...s, elevation: elevation.get(s.id)! })),
+  });
+}
+
+/**
+ * Shifts a whole building, every storey together, by a distance in plan.
+ * Openings follow because they are positioned along their walls.
+ */
+export function moveBuilding(project: Project, buildingId: string, delta: Pt): Project {
+  const building = project.site.buildings.find((b) => b.id === buildingId);
+  if (!building || !Number.isFinite(delta.x) || !Number.isFinite(delta.y)) return project;
+  if (delta.x === 0 && delta.y === 0) return project;
+  const shift = (p: Pt): Pt => ({ x: round(p.x + delta.x), y: round(p.y + delta.y) });
+  return replaceBuilding(project, {
+    ...building,
+    storeys: building.storeys.map((s) => ({
+      ...s,
+      walls: s.walls.map((w) => ({ ...w, a: shift(w.a), b: shift(w.b) })),
+      spaces: s.spaces.map((x) => ({ ...x, anchor: shift(x.anchor) })),
+    })),
   });
 }
 

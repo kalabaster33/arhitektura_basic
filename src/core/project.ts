@@ -32,7 +32,14 @@ export function createProject(name = "Untitled project", snap = 0.05): Project {
     name,
     units: "m",
     grid: { snap },
-    site: { id: newId("site"), name: "Site", boundary: [], buildings: [building] },
+    site: {
+      id: newId("site"),
+      name: "Site",
+      boundary: [],
+      setbacks: [],
+      limits: { maxCoverage: null, maxFloorAreaRatio: null },
+      buildings: [building],
+    },
   };
 }
 
@@ -88,9 +95,25 @@ export function serializeProject(project: Project): string {
 
 /**
  * Upgrades older files step by step: MIGRATIONS[n] turns a version n file into
- * version n + 1. Empty while there is only one version.
+ * version n + 1.
  */
-const MIGRATIONS: Record<number, (data: any) => any> = {};
+const MIGRATIONS: Record<number, (data: any) => any> = {
+  // Version 2 stores a setback per plot edge and the plot's planning limits.
+  1: (data) => {
+    const site = data.site ?? {};
+    const boundary = Array.isArray(site.boundary) ? site.boundary : [];
+    return {
+      ...data,
+      schemaVersion: 2,
+      site: {
+        ...site,
+        boundary,
+        setbacks: boundary.map(() => 0),
+        limits: { maxCoverage: null, maxFloorAreaRatio: null },
+      },
+    };
+  },
+};
 
 /** Parses a saved project; throws a readable error when the file cannot be used. */
 export function parseProject(json: string): Project {
@@ -141,6 +164,21 @@ export function parseProject(json: string): Project {
       );
     }
   }
+  // A plot that cannot be read is left out; the building is still worth opening.
+  const site = data.site;
+  const corners = Array.isArray(site.boundary) ? site.boundary : [];
+  const plotOk =
+    corners.length >= 3 && corners.every((p: any) => Number.isFinite(p?.x) && Number.isFinite(p?.y));
+  site.boundary = plotOk ? corners.map((p: any) => ({ x: p.x, y: p.y })) : [];
+  const setbacks = Array.isArray(site.setbacks) ? site.setbacks : [];
+  site.setbacks = site.boundary.map((_: unknown, i: number) =>
+    Number.isFinite(setbacks[i]) && setbacks[i] >= 0 ? setbacks[i] : 0,
+  );
+  const limit = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null);
+  site.limits = {
+    maxCoverage: limit(site.limits?.maxCoverage),
+    maxFloorAreaRatio: limit(site.limits?.maxFloorAreaRatio),
+  };
   if (!(data.grid?.snap > 0)) data.grid = { snap: 0.05 };
   return data as Project;
 }

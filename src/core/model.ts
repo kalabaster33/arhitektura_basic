@@ -8,7 +8,7 @@
  */
 import type { Pt } from "./geometry.ts";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export type WallKind = "exterior" | "interior";
 
@@ -101,11 +101,22 @@ export interface Building {
   storeys: Storey[];
 }
 
+export interface SiteLimits {
+  /** Largest allowed share of the plot covered by buildings (0.4 = 40 %). */
+  maxCoverage: number | null;
+  /** Largest allowed total gross floor area divided by plot area. */
+  maxFloorAreaRatio: number | null;
+}
+
 export interface Site {
   id: string;
   name: string;
-  /** Plot outline; empty until it is drawn. */
+  /** Plot outline; empty until it is drawn. Edge i runs from corner i to corner i + 1. */
   boundary: Pt[];
+  /** Setback of each boundary edge in metres, one per edge. */
+  setbacks: number[];
+  /** Planning limits for this plot; null means no limit is checked. */
+  limits: SiteLimits;
   buildings: Building[];
 }
 

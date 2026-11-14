@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { moveBuilding } from "../core/building.ts";
 import { addWall, moveNode, moveWall } from "../core/edit.ts";
-import { type Pt, dist, projectParam, roundTo, samePoint, snapPoint } from "../core/geometry.ts";
-import type { Opening, OpeningKind, Storey, Wall, WallKind } from "../core/model.ts";
+import {
+  type Pt,
+  dist,
+  projectParam,
+  ringSignedArea,
+  roundTo,
+  samePoint,
+  snapPoint,
+} from "../core/geometry.ts";
+import type { Opening, OpeningKind, Project, Storey, Wall, WallKind } from "../core/model.ts";
 import {
   type OpeningSize,
   addOpening,
@@ -10,10 +19,15 @@ import {
   moveOpening,
   openingGeometry,
 } from "../core/openings.ts";
+import { type Region, type SiteAnalysis, boundaryProblem, moveBoundaryCorner } from "../core/site.ts";
 import type { Face } from "../core/topology.ts";
 
-export type Tool = "select" | "wall" | "door" | "window";
-export type Selection = { kind: "wall" | "space" | "opening"; id: string } | null;
+export type Tool = "select" | "wall" | "door" | "window" | "site";
+export type Selection =
+  | { kind: "wall" | "space" | "opening"; id: string }
+  /** A corner of the plot, or the edge that starts at that corner. */
+  | { kind: "siteCorner" | "siteEdge"; index: number }
+  | null;
 
 /** How a room that belongs to an apartment is marked on the plan. */
 export interface ApartmentTag {
@@ -49,6 +63,14 @@ interface Props {
   openingSize: Record<OpeningKind, OpeningSize>;
   /** The apartment of each room that is in one. */
   apartmentBySpaceId: Map<string, ApartmentTag>;
+  /** The whole project, for the plot and for moving the building on it. */
+  project: Project;
+  /** The building the shown storey belongs to. */
+  buildingId: string;
+  site: SiteAnalysis;
+  /** A plot outline drawn with the site tool, already checked. */
+  onPlotDrawn: (corners: Pt[]) => void;
+  onProjectChange: (project: Project, record: boolean) => void;
   onChange: (storey: Storey, record: boolean) => void;
   onSelect: (selection: Selection) => void;
 }
@@ -63,7 +85,9 @@ type Drag =
   | { kind: "pan"; x: number; y: number; view: View; moved: boolean }
   | { kind: "node"; base: Storey; from: Pt; last: Pt; moved: boolean }
   | { kind: "wall"; base: Storey; id: string; start: Pt; last: Pt; moved: boolean }
-  | { kind: "opening"; base: Storey; id: string; last: number; moved: boolean };
+  | { kind: "opening"; base: Storey; id: string; last: number; moved: boolean }
+  | { kind: "corner"; base: Project; index: number; last: Pt; moved: boolean }
+  | { kind: "building"; base: Project; start: Pt; last: Pt; moved: boolean };
 
 const SNAP_PX = 10;
 /** How near a wall the pointer must be for the door and window tools to use it. */
@@ -71,6 +95,7 @@ const WALL_REACH_PX = 28;
 
 const ringPath = (ring: Pt[]) =>
   ring.length ? `M${ring.map((p) => `${p.x},${p.y}`).join("L")}Z` : "";
+const regionPath = (region: Region) => region.map((poly) => poly.map(ringPath).join("")).join("");
 
 /**
  * Plan symbol of a door (gap, leaf and swing arc) or a window (frame and glass
@@ -130,8 +155,14 @@ export function PlanCanvas(props: Props) {
   const [chainStart, setChainStart] = useState<Pt | null>(null);
   /** Where the door or window tool would place an opening right now. */
   const [placing, setPlacing] = useState<{ wallId: string; offset: number } | null>(null);
+  /** Corners of a plot outline being drawn with the site tool. */
+  const [plotDraft, setPlotDraft] = useState<Pt[]>([]);
+  const [plotError, setPlotError] = useState<string | null>(null);
   const drag = useRef<Drag | null>(null);
   const fitted = useRef(false);
+  const plot = props.project.site.boundary;
+  const setbacks = props.project.site.setbacks;
+  const hasPlot = plot.length >= 3;
 
   useEffect(() => {
     const svg = svgRef.current!;
@@ -144,7 +175,7 @@ export function PlanCanvas(props: Props) {
 
   const fit = useCallback(() => {
     if (size.w === 0 || size.h === 0) return;
-    const pts = storey.walls.flatMap((w) => [w.a, w.b]);
+    const pts = [...storey.walls.flatMap((w) => [w.a, w.b]), ...plot];
     if (pts.length === 0) {
       setView({ ox: -1, oy: -1, zoom: 60 });
       return;
@@ -161,7 +192,7 @@ export function PlanCanvas(props: Props) {
       ox: minX - (size.w / zoom - w) / 2,
       oy: minY - (size.h / zoom - h) / 2,
     });
-  }, [size, storey.walls]);
+  }, [size, storey.walls, plot]);
 
   useEffect(() => {
     if (!fitted.current && size.w > 0) {
@@ -174,11 +205,33 @@ export function PlanCanvas(props: Props) {
   useEffect(() => {
     if (tool !== "wall") setChainStart(null);
     setPlacing(null);
+    setPlotDraft([]);
+    setPlotError(null);
   }, [tool]);
+
+  /** Closes the outline being drawn, or says why it cannot be a plot. */
+  const finishPlot = (corners: Pt[]) => {
+    const problem = boundaryProblem(corners);
+    if (problem) {
+      setPlotError(problem);
+      return;
+    }
+    setPlotDraft([]);
+    setPlotError(null);
+    props.onPlotDrawn(corners);
+  };
+  const liveDraft = useRef({ plotDraft, finishPlot });
+  liveDraft.current = { plotDraft, finishPlot };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setChainStart(null);
+      if (e.key === "Escape") {
+        setChainStart(null);
+        setPlotDraft([]);
+        setPlotError(null);
+      } else if (e.key === "Enter" && liveDraft.current.plotDraft.length > 0) {
+        liveDraft.current.finishPlot(liveDraft.current.plotDraft);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -253,7 +306,7 @@ export function PlanCanvas(props: Props) {
   };
 
   const onBackgroundDown = (e: React.PointerEvent) => {
-    if (e.button === 1 || (e.button === 0 && tool === "select")) {
+    if (e.button === 1 || (e.button === 0 && (tool === "select" || (tool === "site" && hasPlot)))) {
       svgRef.current!.setPointerCapture(e.pointerId);
       drag.current = { kind: "pan", x: e.clientX, y: e.clientY, view, moved: false };
       return;
@@ -267,6 +320,16 @@ export function PlanCanvas(props: Props) {
       onChange(next, true);
       onSelect({ kind: "opening", id: next.openings[next.openings.length - 1].id });
       setPlacing(null);
+      return;
+    }
+    if (tool === "site") {
+      const p = snapPoint(toModel(e), snapStep);
+      setPlotError(null);
+      if (plotDraft.length >= 3 && dist(toModel(e), plotDraft[0]) <= SNAP_PX / view.zoom) {
+        finishPlot(plotDraft);
+      } else if (!plotDraft.some((q) => samePoint(q, p))) {
+        setPlotDraft([...plotDraft, p]);
+      }
       return;
     }
     if (tool !== "wall") return;
@@ -293,6 +356,27 @@ export function PlanCanvas(props: Props) {
       const dy = e.clientY - d.y;
       if (Math.abs(dx) + Math.abs(dy) > 3) d.moved = true;
       setView({ ...d.view, ox: d.view.ox - dx / d.view.zoom, oy: d.view.oy - dy / d.view.zoom });
+      return;
+    }
+    if (d.kind === "corner") {
+      const to = snapPoint(toModel(e), snapStep);
+      setCursor(to);
+      if (samePoint(to, d.last, 1e-9)) return;
+      const next = moveBoundaryCorner(d.base, d.index, to);
+      // Unchanged although the corner was asked to move: the outline would cross itself.
+      if (next === d.base && !samePoint(to, d.base.site.boundary[d.index], 1e-9)) return;
+      d.last = to;
+      props.onProjectChange(next, !d.moved);
+      d.moved = true;
+      return;
+    }
+    if (d.kind === "building") {
+      const p = toModel(e);
+      const delta = { x: roundTo(p.x - d.start.x, snapStep), y: roundTo(p.y - d.start.y, snapStep) };
+      if (samePoint(delta, d.last, 1e-9)) return;
+      d.last = delta;
+      props.onProjectChange(moveBuilding(d.base, props.buildingId, delta), !d.moved);
+      d.moved = true;
       return;
     }
     if (d.kind === "node") {
@@ -357,6 +441,27 @@ export function PlanCanvas(props: Props) {
     drag.current = { kind: "opening", base: storey, id: opening.id, last: opening.offset, moved: false };
   };
 
+  const startCornerDrag = (e: React.PointerEvent, index: number) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    onSelect({ kind: "siteCorner", index });
+    svgRef.current!.setPointerCapture(e.pointerId);
+    drag.current = { kind: "corner", base: props.project, index, last: plot[index], moved: false };
+  };
+
+  const startBuildingDrag = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    svgRef.current!.setPointerCapture(e.pointerId);
+    drag.current = {
+      kind: "building",
+      base: props.project,
+      start: toModel(e),
+      last: { x: 0, y: 0 },
+      moved: false,
+    };
+  };
+
   const startNodeDrag = (e: React.PointerEvent, from: Pt) => {
     if (e.button !== 0) return;
     e.stopPropagation();
@@ -377,6 +482,10 @@ export function PlanCanvas(props: Props) {
   const wallById = useMemo(() => new Map(storey.walls.map((w) => [w.id, w])), [storey.walls]);
   const placingKind = tool === "door" || tool === "window" ? tool : null;
   const placingWall = placing && placingKind ? wallById.get(placing.wallId) : undefined;
+  const siteTool = tool === "site";
+  const drawingPlot = siteTool && !hasPlot;
+  /** Which side of its edges the inside of the plot is on: 1 for left, -1 for right. */
+  const plotSide = useMemo(() => (ringSignedArea(plot) >= 0 ? 1 : -1), [plot]);
 
   return (
     <svg
@@ -393,6 +502,8 @@ export function PlanCanvas(props: Props) {
       onContextMenu={(e) => {
         e.preventDefault();
         setChainStart(null);
+        setPlotDraft([]);
+        setPlotError(null);
       }}
     >
       <defs>
@@ -416,6 +527,7 @@ export function PlanCanvas(props: Props) {
           />
         ))}
         <path d={`M${-12 * px} 0H${12 * px}M0 ${-12 * px}V${12 * px}`} className="origin" strokeWidth={px} />
+        {hasPlot && <path d={ringPath(plot)} className="plot-fill" pointerEvents="none" />}
 
         {storey.spaces.map((space) => {
           const face = faceBySpaceId.get(space.id);
@@ -567,6 +679,116 @@ export function PlanCanvas(props: Props) {
           </path>
         ))}
 
+        {/* The plot: outline, buildable area, footprint and where the building breaks a limit. */}
+        {hasPlot && (
+          <g className={`site${siteTool ? " is-active" : ""}`}>
+            <path
+              d={regionPath(props.site.buildable)}
+              fillRule="evenodd"
+              className="site__buildable"
+              strokeWidth={1.25 * px}
+              strokeDasharray={`${8 * px} ${5 * px}`}
+              pointerEvents="none"
+            />
+            <path
+              d={regionPath(props.site.footprint)}
+              fillRule="evenodd"
+              className="site__footprint"
+              strokeWidth={1.25 * px}
+              strokeDasharray={`${2 * px} ${3 * px}`}
+              pointerEvents={siteTool ? "auto" : "none"}
+              onPointerDown={siteTool ? startBuildingDrag : undefined}
+            >
+              {siteTool && <title>Building footprint: drag to move the building</title>}
+            </path>
+            {[props.site.insideSetback, props.site.outsidePlot].map((region, i) => (
+              <path
+                key={i}
+                d={regionPath(region)}
+                fillRule="evenodd"
+                className="site__violation"
+                strokeWidth={1.5 * px}
+                pointerEvents="none"
+              />
+            ))}
+            <path d={ringPath(plot)} className="site__plot" strokeWidth={2 * px} pointerEvents="none" />
+            {plot.map((a, i) => {
+              const b = plot[(i + 1) % plot.length];
+              const selected = selection?.kind === "siteEdge" && selection.index === i;
+              const len = dist(a, b) || 1;
+              // The setback is written a little inside the plot, beside the middle of the edge.
+              const mx = (a.x + b.x) / 2 - ((b.y - a.y) / len) * plotSide * 12 * px;
+              const my = (a.y + b.y) / 2 + ((b.x - a.x) / len) * plotSide * 12 * px;
+              return (
+                <g key={i}>
+                  {selected && (
+                    <line
+                      x1={a.x}
+                      y1={a.y}
+                      x2={b.x}
+                      y2={b.y}
+                      className="site__edge-selected"
+                      strokeWidth={4 * px}
+                      pointerEvents="none"
+                    />
+                  )}
+                  {siteTool && (
+                    <>
+                      <line
+                        x1={a.x}
+                        y1={a.y}
+                        x2={b.x}
+                        y2={b.y}
+                        strokeWidth={14 * px}
+                        className="site__edge-hit"
+                        onPointerDown={(e) => {
+                          if (e.button !== 0) return;
+                          e.stopPropagation();
+                          onSelect({ kind: "siteEdge", index: i });
+                        }}
+                      />
+                      <text x={mx} y={my} fontSize={11 * px} className="site__setback" pointerEvents="none">
+                        {(setbacks[i] ?? 0).toFixed(2)}
+                      </text>
+                    </>
+                  )}
+                </g>
+              );
+            })}
+            {siteTool &&
+              plot.map((p, i) => (
+                <circle
+                  key={i}
+                  cx={p.x}
+                  cy={p.y}
+                  r={6 * px}
+                  strokeWidth={1.5 * px}
+                  className={`handle${selection?.kind === "siteCorner" && selection.index === i ? " is-selected" : ""}`}
+                  onPointerDown={(e) => startCornerDrag(e, i)}
+                />
+              ))}
+          </g>
+        )}
+        {drawingPlot && plotDraft.length > 0 && (
+          <g pointerEvents="none">
+            <path
+              d={`M${[...plotDraft, ...(cursor ? [cursor] : [])].map((p) => `${p.x},${p.y}`).join("L")}`}
+              className="site__plot site__plot--draft"
+              strokeWidth={2 * px}
+            />
+            {plotDraft.map((p, i) => (
+              <circle
+                key={i}
+                cx={p.x}
+                cy={p.y}
+                r={(i === 0 ? 6 : 3.5) * px}
+                strokeWidth={1.5 * px}
+                className="handle"
+              />
+            ))}
+          </g>
+        )}
+
         {selectedWall &&
           interactive &&
           [selectedWall.a, selectedWall.b].map((p, i) => (
@@ -604,7 +826,7 @@ export function PlanCanvas(props: Props) {
             </text>
           </>
         )}
-        {tool === "wall" && cursor && (
+        {(tool === "wall" || drawingPlot) && cursor && (
           <circle cx={cursor.x} cy={cursor.y} r={4 * px} strokeWidth={1.5 * px} className="snap-dot" pointerEvents="none" />
         )}
       </g>
@@ -613,6 +835,11 @@ export function PlanCanvas(props: Props) {
         <text x={12} y={size.h - 12}>
           {cursor ? `x ${cursor.x.toFixed(2)}   y ${cursor.y.toFixed(2)} m` : ""}
         </text>
+        {plotError && (
+          <text x={12} y={size.h - 30} className="plan-overlay__error">
+            {plotError} Keep clicking corners, or press Esc to start again.
+          </text>
+        )}
         <text x={size.w - 12} y={size.h - 12} textAnchor="end">
           grid {minor} m · snap {snapStep} m
         </text>
