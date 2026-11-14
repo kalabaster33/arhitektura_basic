@@ -96,6 +96,47 @@ export function computeStoreyAreas(storey: Storey, config: AreaConfig): StoreyAr
   return { spaces, totals };
 }
 
+export interface AreaGroup {
+  spaces: SpaceAreas[];
+  /** Sums over the rooms of the group; gross is the sum of the room gross areas. */
+  totals: { net: number; useful: number; gross: number };
+}
+
+export interface ApartmentAreas extends AreaGroup {
+  apartmentId: string;
+  name: string;
+}
+
+export interface StoreyAreasByApartment {
+  apartments: ApartmentAreas[];
+  /** Rooms that belong to no apartment. */
+  common: AreaGroup;
+}
+
+/** Splits a storey's room areas by apartment; what is left over is common area. */
+export function computeApartmentAreas(
+  storey: Storey,
+  config: AreaConfig,
+  areas: StoreyAreas = computeStoreyAreas(storey, config),
+): StoreyAreasByApartment {
+  const group = (rows: SpaceAreas[]): AreaGroup => {
+    const totals = { net: 0, useful: 0, gross: 0 };
+    for (const r of rows) {
+      totals.net += r.net;
+      totals.useful += r.useful;
+      totals.gross += r.gross;
+    }
+    return { spaces: rows, totals };
+  };
+  const taken = new Set<string>();
+  const apartments = storey.apartments.map((a) => {
+    const rows = areas.spaces.filter((r) => a.spaceIds.includes(r.spaceId) && !taken.has(r.spaceId));
+    for (const r of rows) taken.add(r.spaceId);
+    return { apartmentId: a.id, name: a.name, ...group(rows) };
+  });
+  return { apartments, common: group(areas.spaces.filter((r) => !taken.has(r.spaceId))) };
+}
+
 export interface BuildingAreas {
   /** Lowest storey first. */
   storeys: { storeyId: string; name: string; elevation: number; totals: StoreyAreas["totals"] }[];

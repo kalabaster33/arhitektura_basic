@@ -13,6 +13,7 @@ import {
 } from "./geometry.ts";
 import { newId } from "./ids.ts";
 import type { Space, Storey, Wall, WallKind } from "./model.ts";
+import { reconcileOpenings } from "./openings.ts";
 import { syncCirculation, syncSpaces } from "./spaces.ts";
 
 /**
@@ -65,11 +66,13 @@ function finish(storey: Storey, edited: Wall[]): Storey {
   const walls = reattach(storey.walls, edited);
   const kept = walls.filter((w) => dist(w.a, w.b) > NODE_TOL);
   const ids = new Set(kept.map((w) => w.id));
-  return syncSpaces({
-    ...storey,
-    walls: kept,
-    openings: storey.openings.filter((o) => ids.has(o.wallId)),
-  });
+  return syncSpaces(
+    reconcileOpenings(storey, {
+      ...storey,
+      walls: kept,
+      openings: storey.openings.filter((o) => ids.has(o.wallId)),
+    }),
+  );
 }
 
 export function addWall(

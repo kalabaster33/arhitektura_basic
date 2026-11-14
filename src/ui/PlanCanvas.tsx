@@ -1,11 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { addWall, moveNode, moveWall } from "../core/edit.ts";
-import { type Pt, dist, roundTo, samePoint, snapPoint } from "../core/geometry.ts";
-import type { Storey, Wall, WallKind } from "../core/model.ts";
+import { type Pt, dist, projectParam, roundTo, samePoint, snapPoint } from "../core/geometry.ts";
+import type { Opening, OpeningKind, Storey, Wall, WallKind } from "../core/model.ts";
+import {
+  type OpeningSize,
+  addOpening,
+  fitOffset,
+  locateOnWall,
+  moveOpening,
+  openingGeometry,
+} from "../core/openings.ts";
 import type { Face } from "../core/topology.ts";
 
-export type Tool = "select" | "wall";
-export type Selection = { kind: "wall" | "space"; id: string } | null;
+export type Tool = "select" | "wall" | "door" | "window";
+export type Selection = { kind: "wall" | "space" | "opening"; id: string } | null;
+
+/** How a room that belongs to an apartment is marked on the plan. */
+export interface ApartmentTag {
+  name: string;
+  color: string;
+}
 
 /** Outline of a core space on the storey above or below, drawn over the plan. */
 export interface CoreGhost {
@@ -31,6 +45,10 @@ interface Props {
   coreGhosts: CoreGhost[];
   /** Spaces on this storey that have a core alignment warning. */
   flaggedSpaceIds: Set<string>;
+  /** Size of the doors and windows the door and window tools place. */
+  openingSize: Record<OpeningKind, OpeningSize>;
+  /** The apartment of each room that is in one. */
+  apartmentBySpaceId: Map<string, ApartmentTag>;
   onChange: (storey: Storey, record: boolean) => void;
   onSelect: (selection: Selection) => void;
 }
@@ -44,12 +62,64 @@ interface View {
 type Drag =
   | { kind: "pan"; x: number; y: number; view: View; moved: boolean }
   | { kind: "node"; base: Storey; from: Pt; last: Pt; moved: boolean }
-  | { kind: "wall"; base: Storey; id: string; start: Pt; last: Pt; moved: boolean };
+  | { kind: "wall"; base: Storey; id: string; start: Pt; last: Pt; moved: boolean }
+  | { kind: "opening"; base: Storey; id: string; last: number; moved: boolean };
 
 const SNAP_PX = 10;
+/** How near a wall the pointer must be for the door and window tools to use it. */
+const WALL_REACH_PX = 28;
 
 const ringPath = (ring: Pt[]) =>
   ring.length ? `M${ring.map((p) => `${p.x},${p.y}`).join("L")}Z` : "";
+
+/**
+ * Plan symbol of a door (gap, leaf and swing arc) or a window (frame and glass
+ * line), drawn in the wall's own axes: x along the wall from the first jamb,
+ * y across it.
+ */
+function OpeningSymbol(props: {
+  wall: Wall;
+  opening: Pick<Opening, "kind" | "offset" | "width">;
+  px: number;
+  className?: string;
+  onPointerDown?: (e: React.PointerEvent) => void;
+}) {
+  const { wall, opening, px } = props;
+  const g = openingGeometry(wall, opening as Opening);
+  const w = opening.width;
+  const half = Math.max(g.thickness, 2 * px) / 2;
+  const grab = Math.max(half, 7 * px);
+  return (
+    <g
+      transform={`matrix(${g.dir.x} ${g.dir.y} ${g.normal.x} ${g.normal.y} ${g.start.x} ${g.start.y})`}
+      className={`opening opening--${opening.kind} ${props.className ?? ""}`}
+      pointerEvents={props.onPointerDown ? "auto" : "none"}
+      onPointerDown={props.onPointerDown}
+    >
+      <rect x={0} y={-half} width={w} height={2 * half} className="opening__gap" strokeWidth={px} />
+      {opening.kind === "door" ? (
+        <>
+          <path
+            d={`M0 ${-half}V${half}M${w} ${-half}V${half}`}
+            className="opening__line"
+            strokeWidth={1.5 * px}
+          />
+          <path d={`M0 ${half}V${half + w}`} className="opening__line" strokeWidth={2 * px} />
+          <path
+            d={`M0 ${half + w}A${w} ${w} 0 0 0 ${w} ${half}`}
+            className="opening__swing"
+            strokeWidth={px}
+          />
+        </>
+      ) : (
+        <path d={`M0 0H${w}`} className="opening__line" strokeWidth={1.5 * px} />
+      )}
+      {props.onPointerDown && (
+        <rect x={0} y={-grab} width={w} height={2 * grab} className="opening__hit" />
+      )}
+    </g>
+  );
+}
 
 export function PlanCanvas(props: Props) {
   const { storey, faceBySpaceId, tool, selection, snapStep, onChange, onSelect } = props;
@@ -58,6 +128,8 @@ export function PlanCanvas(props: Props) {
   const [view, setView] = useState<View>({ ox: -2, oy: -2, zoom: 60 });
   const [cursor, setCursor] = useState<Pt | null>(null);
   const [chainStart, setChainStart] = useState<Pt | null>(null);
+  /** Where the door or window tool would place an opening right now. */
+  const [placing, setPlacing] = useState<{ wallId: string; offset: number } | null>(null);
   const drag = useRef<Drag | null>(null);
   const fitted = useRef(false);
 
@@ -101,6 +173,7 @@ export function PlanCanvas(props: Props) {
   // Leaving the wall tool ends the chain being drawn.
   useEffect(() => {
     if (tool !== "wall") setChainStart(null);
+    setPlacing(null);
   }, [tool]);
 
   useEffect(() => {
@@ -166,13 +239,37 @@ export function PlanCanvas(props: Props) {
       : { x: chainStart.x, y: p.y };
   };
 
+  /** The spot on the nearest wall where the door or window tool can place its opening. */
+  const placeAt = (e: { clientX: number; clientY: number }, kind: OpeningKind) => {
+    const hit = locateOnWall(storey, toModel(e), WALL_REACH_PX / view.zoom);
+    if (!hit) return null;
+    const offset = fitOffset(
+      storey,
+      hit.wallId,
+      roundTo(hit.offset, snapStep),
+      props.openingSize[kind].width,
+    );
+    return offset === null ? null : { wallId: hit.wallId, offset };
+  };
+
   const onBackgroundDown = (e: React.PointerEvent) => {
     if (e.button === 1 || (e.button === 0 && tool === "select")) {
       svgRef.current!.setPointerCapture(e.pointerId);
       drag.current = { kind: "pan", x: e.clientX, y: e.clientY, view, moved: false };
       return;
     }
-    if (e.button !== 0 || tool !== "wall") return;
+    if (e.button !== 0) return;
+    if (tool === "door" || tool === "window") {
+      const at = placeAt(e, tool);
+      if (!at) return;
+      const next = addOpening(storey, at.wallId, tool, at.offset, props.openingSize[tool]);
+      if (next === storey) return;
+      onChange(next, true);
+      onSelect({ kind: "opening", id: next.openings[next.openings.length - 1].id });
+      setPlacing(null);
+      return;
+    }
+    if (tool !== "wall") return;
     const p = drawPoint(e);
     if (!chainStart) {
       setChainStart(p);
@@ -188,6 +285,7 @@ export function PlanCanvas(props: Props) {
     const d = drag.current;
     if (!d) {
       setCursor(tool === "wall" ? drawPoint(e) : snapPoint(toModel(e), snapStep));
+      if (tool === "door" || tool === "window") setPlacing(placeAt(e, tool));
       return;
     }
     if (d.kind === "pan") {
@@ -203,6 +301,19 @@ export function PlanCanvas(props: Props) {
       if (samePoint(to, d.last, 1e-9)) return;
       d.last = to;
       onChange(moveNode(d.base, d.from, to), !d.moved);
+      d.moved = true;
+      return;
+    }
+    if (d.kind === "opening") {
+      const opening = d.base.openings.find((o) => o.id === d.id);
+      const wall = d.base.walls.find((w) => w.id === opening?.wallId);
+      if (!opening || !wall) return;
+      const along = projectParam(toModel(e), wall.a, wall.b) * dist(wall.a, wall.b);
+      const next = moveOpening(d.base, d.id, roundTo(along, snapStep));
+      const offset = next.openings.find((o) => o.id === d.id)!.offset;
+      if (offset === d.last) return;
+      d.last = offset;
+      onChange(next, !d.moved);
       d.moved = true;
       return;
     }
@@ -238,6 +349,14 @@ export function PlanCanvas(props: Props) {
     };
   };
 
+  const startOpeningDrag = (e: React.PointerEvent, opening: Opening) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    onSelect({ kind: "opening", id: opening.id });
+    svgRef.current!.setPointerCapture(e.pointerId);
+    drag.current = { kind: "opening", base: storey, id: opening.id, last: opening.offset, moved: false };
+  };
+
   const startNodeDrag = (e: React.PointerEvent, from: Pt) => {
     if (e.button !== 0) return;
     e.stopPropagation();
@@ -255,6 +374,9 @@ export function PlanCanvas(props: Props) {
     selection?.kind === "wall" ? storey.walls.find((w) => w.id === selection.id) : undefined;
   const interactive = tool === "select";
   const preview = tool === "wall" && chainStart && cursor ? { a: chainStart, b: cursor } : null;
+  const wallById = useMemo(() => new Map(storey.walls.map((w) => [w.id, w])), [storey.walls]);
+  const placingKind = tool === "door" || tool === "window" ? tool : null;
+  const placingWall = placing && placingKind ? wallById.get(placing.wallId) : undefined;
 
   return (
     <svg
@@ -263,7 +385,11 @@ export function PlanCanvas(props: Props) {
       onPointerDown={onBackgroundDown}
       onPointerMove={onMove}
       onPointerUp={onUp}
-      onPointerLeave={() => !drag.current && setCursor(null)}
+      onPointerLeave={() => {
+        if (drag.current) return;
+        setCursor(null);
+        setPlacing(null);
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
         setChainStart(null);
@@ -313,6 +439,24 @@ export function PlanCanvas(props: Props) {
           );
         })}
 
+        {storey.spaces.map((space) => {
+          const face = faceBySpaceId.get(space.id);
+          const tag = props.apartmentBySpaceId.get(space.id);
+          if (!face || !tag) return null;
+          return (
+            <path
+              key={space.id}
+              d={[face.netOuter, ...face.netHoles].map(ringPath).join("")}
+              fillRule="evenodd"
+              className="apartment-tint"
+              fill={tag.color}
+              stroke={tag.color}
+              strokeWidth={2.5 * px}
+              pointerEvents="none"
+            />
+          );
+        })}
+
         {props.underlay.map((w) => (
           <line
             key={w.id}
@@ -355,8 +499,37 @@ export function PlanCanvas(props: Props) {
             />
           ))}
 
+        {storey.openings.map((o) => {
+          const wall = wallById.get(o.wallId);
+          if (!wall) return null;
+          const selected = selection?.kind === "opening" && selection.id === o.id;
+          return (
+            <OpeningSymbol
+              key={o.id}
+              wall={wall}
+              opening={o}
+              px={px}
+              className={selected ? "is-selected" : ""}
+              onPointerDown={interactive ? (e) => startOpeningDrag(e, o) : undefined}
+            />
+          );
+        })}
+        {placing && placingWall && placingKind && (
+          <OpeningSymbol
+            wall={placingWall}
+            opening={{
+              kind: placingKind,
+              offset: placing.offset,
+              width: props.openingSize[placingKind].width,
+            }}
+            px={px}
+            className="is-preview"
+          />
+        )}
+
         {storey.spaces.map((space) => {
           if (!faceBySpaceId.has(space.id)) return null;
+          const tag = props.apartmentBySpaceId.get(space.id);
           return (
             <text
               key={space.id}
@@ -372,6 +545,11 @@ export function PlanCanvas(props: Props) {
               <tspan x={space.anchor.x} dy={15 * px}>
                 {props.areaLabel(space.id)}
               </tspan>
+              {tag && (
+                <tspan x={space.anchor.x} dy={14 * px} fontSize={10.5 * px} fill={tag.color}>
+                  {tag.name}
+                </tspan>
+              )}
             </text>
           );
         })}

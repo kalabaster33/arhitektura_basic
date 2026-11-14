@@ -1,0 +1,6 @@
+{
+  "_status": "TO BE VERIFIED BY A LICENSED ENGINEER. These lists are neutral placeholders, not taken from any standard or building code. Check them against the rules that apply to the project.",
+  "_doc": "daylightSpaceTypes: room types that get a warning when they have no window in an exterior wall. doorExemptSpaceTypes: room types that are not expected to have a door.",
+  "daylightSpaceTypes": ["living", "bedroom"],
+  "doorExemptSpaceTypes": ["shaft"]
+}

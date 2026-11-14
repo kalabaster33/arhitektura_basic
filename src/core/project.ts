@@ -131,6 +131,14 @@ export function parseProject(json: string): Project {
           [w.a?.x, w.a?.y, w.b?.x, w.b?.y, w.thickness].every(Number.isFinite);
         if (!ok) throw new Error(`Storey "${s.name}" contains a damaged wall.`);
       }
+      // An opening is no use without its wall or its size; leave such ones out.
+      const wallIds = new Set(s.walls.map((w: Wall) => w.id));
+      s.openings = s.openings.filter(
+        (o: any) =>
+          typeof o?.id === "string" &&
+          wallIds.has(o.wallId) &&
+          [o.offset, o.width, o.height, o.sill].every(Number.isFinite),
+      );
     }
   }
   if (!(data.grid?.snap > 0)) data.grid = { snap: 0.05 };

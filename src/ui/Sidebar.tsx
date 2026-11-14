@@ -1,10 +1,34 @@
 import { useEffect, useState } from "react";
-import { type AreaConfig, type BuildingAreas, type StoreyAreas, formatArea } from "../core/areas.ts";
+import {
+  type ApartmentInfo,
+  apartmentOfSpace,
+  assignSpace,
+  createApartment,
+  deleteApartment,
+  renameApartment,
+} from "../core/apartments.ts";
+import {
+  type AreaConfig,
+  type BuildingAreas,
+  type SpaceAreas,
+  type StoreyAreas,
+  type StoreyAreasByApartment,
+  formatArea,
+} from "../core/areas.ts";
 import type { ElevationIssue } from "../core/building.ts";
+import type { PlanIssue } from "../core/checks.ts";
 import type { CoreIssue } from "../core/coreAlignment.ts";
 import { moveNode, setWallKind, setWallLength, setWallThickness, updateSpace } from "../core/edit.ts";
 import { type Pt, dist } from "../core/geometry.ts";
-import { type SpaceType, type Storey, type Wall, SPACE_TYPES } from "../core/model.ts";
+import {
+  type Opening,
+  type OpeningKind,
+  type SpaceType,
+  type Storey,
+  type Wall,
+  SPACE_TYPES,
+} from "../core/model.ts";
+import { deleteOpening, moveOpening, updateOpening } from "../core/openings.ts";
 import { parseLength } from "../core/units.ts";
 import type { Selection } from "./PlanCanvas.tsx";
 
@@ -110,10 +134,71 @@ function WallPanel(props: { storey: Storey; wall: Wall; onChange: (s: Storey) =>
   );
 }
 
+function OpeningPanel(props: { storey: Storey; opening: Opening; onChange: (s: Storey) => void }) {
+  const { storey, opening, onChange } = props;
+  const wall = storey.walls.find((w) => w.id === opening.wallId);
+  return (
+    <section className="panel">
+      <h2>{opening.kind === "door" ? "Door" : "Window"}</h2>
+      <label className="field">
+        <span>Kind</span>
+        <select
+          value={opening.kind}
+          onChange={(e) =>
+            onChange(updateOpening(storey, opening.id, { kind: e.target.value as OpeningKind }))
+          }
+        >
+          <option value="door">door</option>
+          <option value="window">window</option>
+        </select>
+      </label>
+      <div className="field-grid">
+        <LengthField
+          label="Width"
+          value={opening.width}
+          min={0.01}
+          onCommit={(v) => onChange(updateOpening(storey, opening.id, { width: v }))}
+        />
+        <LengthField
+          label="Height"
+          value={opening.height}
+          min={0.01}
+          onCommit={(v) => onChange(updateOpening(storey, opening.id, { height: v }))}
+        />
+        <LengthField
+          label="From wall start to centre"
+          value={opening.offset}
+          min={0}
+          onCommit={(v) => onChange(moveOpening(storey, opening.id, v))}
+        />
+        {opening.kind === "window" && (
+          <LengthField
+            label="Sill height"
+            value={opening.sill}
+            min={0}
+            onCommit={(v) => onChange(updateOpening(storey, opening.id, { sill: v }))}
+          />
+        )}
+      </div>
+      <button onClick={() => onChange(deleteOpening(storey, opening.id))}>
+        Delete {opening.kind}
+      </button>
+      <p className="hint">
+        {wall ? `On a ${dist(wall.a, wall.b).toFixed(2)} m ${wall.kind} wall. ` : ""}
+        Drag it along the wall, or type a distance. It stops at joining walls and at other
+        openings; a width that fits nowhere on the wall is not applied.
+      </p>
+    </section>
+  );
+}
+
+const NEW_APARTMENT = "__new";
+
 function SpacePanel(props: { storey: Storey; spaceId: string; onChange: (s: Storey) => void }) {
   const { storey, onChange } = props;
   const space = storey.spaces.find((s) => s.id === props.spaceId);
   if (!space) return null;
+  const apartment = apartmentOfSpace(storey, space.id);
   return (
     <section className="panel">
       <h2>Room</h2>
@@ -139,6 +224,28 @@ function SpacePanel(props: { storey: Storey; spaceId: string; onChange: (s: Stor
           ))}
         </select>
       </label>
+      <label className="field">
+        <span>Apartment</span>
+        <select
+          value={apartment?.id ?? ""}
+          onChange={(e) => {
+            const value = e.target.value;
+            onChange(
+              value === NEW_APARTMENT
+                ? createApartment(storey, [space.id]).storey
+                : assignSpace(storey, space.id, value || null),
+            );
+          }}
+        >
+          <option value="">none (common area)</option>
+          {storey.apartments.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name}
+            </option>
+          ))}
+          <option value={NEW_APARTMENT}>New apartment…</option>
+        </select>
+      </label>
       <p className="hint">Bounded by {space.wallIds.length} walls. Move any of them to resize it.</p>
     </section>
   );
@@ -147,14 +254,35 @@ function SpacePanel(props: { storey: Storey; spaceId: string; onChange: (s: Stor
 export function AreaTable(props: {
   storey: Storey;
   areas: StoreyAreas;
+  byApartment: StoreyAreasByApartment;
   buildingAreas: BuildingAreas;
   config: AreaConfig;
   onSelectStorey: (storeyId: string) => void;
   selection: Selection;
   onSelect: (s: Selection) => void;
 }) {
-  const { areas, config, selection } = props;
+  const { areas, byApartment, config, selection } = props;
   const f = (v: number) => formatArea(v, config);
+  const roomRow = (row: SpaceAreas) => (
+    <tr
+      key={row.spaceId}
+      className={selection?.kind === "space" && selection.id === row.spaceId ? "is-selected" : ""}
+      onClick={() => props.onSelect({ kind: "space", id: row.spaceId })}
+    >
+      <td>
+        {row.name}
+        {row.type !== "room" && <small>{row.type}</small>}
+      </td>
+      <td>{f(row.net)}</td>
+      <td>{f(row.useful)}</td>
+      <td>{f(row.gross)}</td>
+    </tr>
+  );
+  const grouped = byApartment.apartments.length > 0;
+  const groups = [
+    ...byApartment.apartments.map((a) => ({ key: a.apartmentId, name: a.name, group: a })),
+    { key: "common", name: "Common area", group: byApartment.common },
+  ].filter((g) => g.group.spaces.length > 0);
   return (
     <section className="panel">
       <h2>
@@ -172,25 +300,21 @@ export function AreaTable(props: {
               <th>Gross</th>
             </tr>
           </thead>
-          <tbody>
-            {areas.spaces.map((row) => (
-              <tr
-                key={row.spaceId}
-                className={
-                  selection?.kind === "space" && selection.id === row.spaceId ? "is-selected" : ""
-                }
-                onClick={() => props.onSelect({ kind: "space", id: row.spaceId })}
-              >
-                <td>
-                  {row.name}
-                  {row.type !== "room" && <small>{row.type}</small>}
-                </td>
-                <td>{f(row.net)}</td>
-                <td>{f(row.useful)}</td>
-                <td>{f(row.gross)}</td>
-              </tr>
-            ))}
-          </tbody>
+          {grouped ? (
+            groups.map((g) => (
+              <tbody key={g.key}>
+                <tr className="areas__group">
+                  <th scope="rowgroup">{g.name}</th>
+                  <td>{f(g.group.totals.net)}</td>
+                  <td>{f(g.group.totals.useful)}</td>
+                  <td>{f(g.group.totals.gross)}</td>
+                </tr>
+                {g.group.spaces.map(roomRow)}
+              </tbody>
+            ))
+          ) : (
+            <tbody>{areas.spaces.map(roomRow)}</tbody>
+          )}
           <tfoot>
             <tr>
               <td>Storey</td>
@@ -244,6 +368,7 @@ export function AreaTable(props: {
         {config.gross.space === "wallCentreline" ? "wall centrelines" : "inside wall faces"}. Storey
         gross: to the{" "}
         {config.gross.storey === "wallOuterFace" ? "outside wall faces" : "wall centrelines"}.
+        {grouped && " Apartment and common-area gross: the sum of their rooms' gross."}
       </p>
       <p className="hint hint--warn">
         Area definitions are placeholders — to be verified by a licensed engineer
@@ -263,6 +388,10 @@ export function PropertiesPanel(props: {
     const wall = storey.walls.find((w) => w.id === selection.id);
     if (wall) return <WallPanel storey={storey} wall={wall} onChange={onChange} />;
   }
+  if (selection?.kind === "opening") {
+    const opening = storey.openings.find((o) => o.id === selection.id);
+    if (opening) return <OpeningPanel storey={storey} opening={opening} onChange={onChange} />;
+  }
   if (selection?.kind === "space") {
     return <SpacePanel storey={storey} spaceId={selection.id} onChange={onChange} />;
   }
@@ -270,7 +399,126 @@ export function PropertiesPanel(props: {
     <section className="panel">
       <h2>Properties</h2>
       <p className="hint">
-        Select a wall to type its length, thickness or coordinates. Select a room to name it.
+        Select a wall to type its length, thickness or coordinates. Select a door or window to
+        size it. Select a room to name it and put it in an apartment.
+      </p>
+    </section>
+  );
+}
+
+export function ApartmentsPanel(props: {
+  storey: Storey;
+  infos: ApartmentInfo[];
+  byApartment: StoreyAreasByApartment;
+  config: AreaConfig;
+  colorOf: (apartmentId: string) => string;
+  selection: Selection;
+  onChange: (s: Storey, record?: boolean) => void;
+  onSelect: (s: Selection) => void;
+}) {
+  const { storey, selection, onChange } = props;
+  const selectedRoom =
+    selection?.kind === "space" ? storey.spaces.find((s) => s.id === selection.id) : undefined;
+  return (
+    <section className="panel">
+      <h2>
+        Apartments <small>{storey.name}</small>
+      </h2>
+      {storey.apartments.length > 0 && (
+        <ul className="apartments">
+          {storey.apartments.map((a) => {
+            const info = props.infos.find((i) => i.apartmentId === a.id);
+            const net = props.byApartment.apartments.find((x) => x.apartmentId === a.id)?.totals.net ?? 0;
+            const rooms = a.spaceIds.length;
+            const entrances = info?.entrances.length ?? 0;
+            return (
+              <li key={a.id}>
+                <button
+                  className="swatch"
+                  style={{ background: props.colorOf(a.id) }}
+                  title="Select the first room of this apartment"
+                  aria-label={`Select ${a.name}`}
+                  disabled={rooms === 0}
+                  onClick={() => props.onSelect({ kind: "space", id: a.spaceIds[0] })}
+                />
+                <input
+                  value={a.name}
+                  aria-label="Apartment name"
+                  onChange={(e) => onChange(renameApartment(storey, a.id, e.target.value), false)}
+                />
+                <button
+                  title="Delete the apartment; its rooms stay"
+                  aria-label={`Delete ${a.name}`}
+                  onClick={() => onChange(deleteApartment(storey, a.id))}
+                >
+                  ×
+                </button>
+                <small>
+                  {rooms === 0 ? "no rooms yet" : `${rooms} room${rooms > 1 ? "s" : ""}`} ·{" "}
+                  {formatArea(net, props.config)} m² net
+                  {rooms > 0 && (
+                    <>
+                      {" · "}
+                      <span className={entrances === 0 ? "is-bad" : ""}>
+                        {entrances === 0
+                          ? "no entrance"
+                          : `${entrances} entrance${entrances > 1 ? "s" : ""}`}
+                      </span>
+                      {(info?.pieces ?? 1) > 1 && <span className="is-bad"> · rooms not adjoining</span>}
+                    </>
+                  )}
+                </small>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <button
+        onClick={() => onChange(createApartment(storey, selectedRoom ? [selectedRoom.id] : []).storey)}
+      >
+        {selectedRoom ? `New apartment from "${selectedRoom.name}"` : "New apartment"}
+      </button>
+      <p className="hint">
+        Select a room and choose its apartment in the Room panel. A room is in one apartment at
+        most; rooms in none count as common area.
+      </p>
+    </section>
+  );
+}
+
+export function PlanChecksPanel(props: {
+  storey: Storey;
+  issues: PlanIssue[];
+  onOpen: (issue: PlanIssue) => void;
+}) {
+  const { issues } = props;
+  return (
+    <section className="panel">
+      <h2>
+        Doors &amp; daylight{" "}
+        <small>
+          {issues.length === 0 ? "no warnings" : `${issues.length} warning${issues.length > 1 ? "s" : ""}`}
+        </small>
+      </h2>
+      {issues.length === 0 ? (
+        props.storey.spaces.length === 0 ? (
+          <p className="hint">Nothing to check until the storey has rooms.</p>
+        ) : (
+          <p className="ok">No door, daylight or entrance warnings on this storey.</p>
+        )
+      ) : (
+        <ul className="warnings">
+          {issues.map((issue) => (
+            <li key={`${issue.kind}-${issue.apartmentId ?? issue.spaceId}`}>
+              <button onClick={() => props.onOpen(issue)}>{issue.message}</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="hint">
+        Checked on this storey: a door for every room, a window in an exterior wall for rooms that
+        need daylight, an entrance for every apartment. Which room types each rule covers is set
+        in src/config/roomChecks.json (to be verified by a licensed engineer).
       </p>
     </section>
   );

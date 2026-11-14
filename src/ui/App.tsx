@@ -2,7 +2,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import areaDefinitions from "../config/areaDefinitions.json";
 import coreAlignment from "../config/coreAlignment.json";
 import editorDefaults from "../config/editorDefaults.json";
-import { computeBuildingAreas, computeStoreyAreas, formatArea, parseAreaConfig } from "../core/areas.ts";
+import roomChecks from "../config/roomChecks.json";
+import { describeApartments } from "../core/apartments.ts";
+import {
+  computeApartmentAreas,
+  computeBuildingAreas,
+  computeStoreyAreas,
+  formatArea,
+  parseAreaConfig,
+} from "../core/areas.ts";
 import {
   addStorey,
   checkElevations,
@@ -14,8 +22,10 @@ import {
   updateStoreyInfo,
 } from "../core/building.ts";
 import { checkCoreAlignment, coreOutlines, parseCoreConfig } from "../core/coreAlignment.ts";
+import { checkBuildingPlan, parseRoomCheckConfig } from "../core/checks.ts";
 import { deleteWall } from "../core/edit.ts";
 import type { Storey, WallKind } from "../core/model.ts";
+import { deleteOpening } from "../core/openings.ts";
 import {
   createProject,
   getActiveStorey,
@@ -24,12 +34,54 @@ import {
   serializeProject,
 } from "../core/project.ts";
 import { linkSpaces } from "../core/spaces.ts";
-import { type CoreGhost, PlanCanvas, type Selection, type Tool } from "./PlanCanvas.tsx";
-import { AreaTable, LengthField, PropertiesPanel, StoreysPanel, WarningsPanel } from "./Sidebar.tsx";
+import {
+  type ApartmentTag,
+  type CoreGhost,
+  PlanCanvas,
+  type Selection,
+  type Tool,
+} from "./PlanCanvas.tsx";
+import {
+  ApartmentsPanel,
+  AreaTable,
+  LengthField,
+  PlanChecksPanel,
+  PropertiesPanel,
+  StoreysPanel,
+  WarningsPanel,
+} from "./Sidebar.tsx";
 import { useProjectStore } from "./useProjectStore.ts";
 
 const areaConfig = parseAreaConfig(areaDefinitions);
 const coreConfig = parseCoreConfig(coreAlignment);
+const roomCheckConfig = parseRoomCheckConfig(roomChecks);
+
+/** Apartments are told apart on the plan by colour, in the order they were made. */
+const APARTMENT_COLORS = [
+  "#1f6fb5",
+  "#c8641b",
+  "#2e8556",
+  "#8a4fb0",
+  "#b8323a",
+  "#11848a",
+  "#86622f",
+  "#4f5fc4",
+];
+
+const TOOLS: { tool: Tool; label: string; title: string }[] = [
+  { tool: "select", label: "Select", title: "Select and move (V)" },
+  { tool: "wall", label: "Wall", title: "Draw walls (W)" },
+  { tool: "door", label: "Door", title: "Place doors on walls (D)" },
+  { tool: "window", label: "Window", title: "Place windows on walls (N)" },
+];
+
+const STATUS: Record<Tool, string> = {
+  select:
+    "Drag a wall, its end points, a door or a window · drag empty space to pan · wheel to zoom · Delete removes the selection",
+  wall: "Click to place wall ends · Shift keeps it straight · Esc or right-click ends the run",
+  door: "Move over a wall and click to place a door · it snaps to where it fits",
+  window: "Move over a wall and click to place a window · it snaps to where it fits",
+};
 
 export function App() {
   const store = useProjectStore();
@@ -47,11 +99,30 @@ export function App() {
   const linked = useMemo(() => linkSpaces(storey), [storey]);
   const areas = useMemo(() => computeStoreyAreas(storey, areaConfig), [storey]);
   const netById = useMemo(() => new Map(areas.spaces.map((s) => [s.spaceId, s.net])), [areas]);
+  const byApartment = useMemo(() => computeApartmentAreas(storey, areaConfig, areas), [storey, areas]);
+  const apartmentInfos = useMemo(() => describeApartments(storey, linked), [storey, linked]);
+  const colorOf = (apartmentId: string) =>
+    APARTMENT_COLORS[
+      Math.max(0, storey.apartments.findIndex((a) => a.id === apartmentId)) % APARTMENT_COLORS.length
+    ];
+  const apartmentBySpaceId = useMemo(() => {
+    const tags = new Map<string, ApartmentTag>();
+    storey.apartments.forEach((a, i) => {
+      const tag = { name: a.name, color: APARTMENT_COLORS[i % APARTMENT_COLORS.length] };
+      for (const id of a.spaceIds) tags.set(id, tag);
+    });
+    return tags;
+  }, [storey.apartments]);
 
   const storeys = useMemo(() => sortedStoreys(building), [building]);
   const buildingAreas = useMemo(() => computeBuildingAreas(building, areaConfig), [building]);
   const coreIssues = useMemo(() => checkCoreAlignment(building, coreConfig), [building]);
   const elevationIssues = useMemo(() => checkElevations(building), [building]);
+  const planIssues = useMemo(() => checkBuildingPlan(building, roomCheckConfig), [building]);
+  const storeyPlanIssues = useMemo(
+    () => planIssues.filter((i) => i.storeyId === storey.id),
+    [planIssues, storey.id],
+  );
   const hasCore = useMemo(
     () => building.storeys.some((s) => s.spaces.some((x) => coreConfig.coreSpaceTypes.includes(x.type))),
     [building],
@@ -65,8 +136,9 @@ export function App() {
       if (i.kind === "misaligned") bump(i.otherStoreyId);
     }
     for (const i of elevationIssues) bump(i.storeyId);
+    for (const i of planIssues) bump(i.storeyId);
     return count;
-  }, [coreIssues, elevationIssues]);
+  }, [coreIssues, elevationIssues, planIssues]);
 
   // What the neighbouring floors contribute to this plan.
   const index = storeys.findIndex((s) => s.id === storey.id);
@@ -130,10 +202,19 @@ export function App() {
         store.redo();
       } else if (!mod && key === "v") setTool("select");
       else if (!mod && key === "w") setTool("wall");
+      else if (!mod && key === "d") setTool("door");
+      else if (!mod && key === "n") setTool("window");
       else if (e.key === "Escape") setSelection(null);
-      else if ((e.key === "Delete" || e.key === "Backspace") && selection?.kind === "wall") {
+      else if (
+        (e.key === "Delete" || e.key === "Backspace") &&
+        (selection?.kind === "wall" || selection?.kind === "opening")
+      ) {
         e.preventDefault();
-        setStorey(deleteWall(storey, selection.id));
+        setStorey(
+          selection.kind === "wall"
+            ? deleteWall(storey, selection.id)
+            : deleteOpening(storey, selection.id),
+        );
         setSelection(null);
       }
     };
@@ -182,12 +263,16 @@ export function App() {
           onChange={(e) => store.set({ ...project, name: e.target.value }, false)}
         />
         <div className="group" role="group" aria-label="Tool">
-          <button className={tool === "select" ? "is-active" : ""} onClick={() => setTool("select")} title="Select and move (V)">
-            Select
-          </button>
-          <button className={tool === "wall" ? "is-active" : ""} onClick={() => setTool("wall")} title="Draw walls (W)">
-            Wall
-          </button>
+          {TOOLS.map((t) => (
+            <button
+              key={t.tool}
+              className={tool === t.tool ? "is-active" : ""}
+              onClick={() => setTool(t.tool)}
+              title={t.title}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
         <label className="inline">
           New walls
@@ -259,14 +344,13 @@ export function App() {
             underlay={below?.walls ?? []}
             coreGhosts={coreGhosts}
             flaggedSpaceIds={flaggedSpaceIds}
+            openingSize={editorDefaults.openings}
+            apartmentBySpaceId={apartmentBySpaceId}
             onChange={setStorey}
             onSelect={setSelection}
           />
           <p className="status">
-            <strong>{storey.name}</strong> ·{" "}
-            {tool === "wall"
-              ? "Click to place wall ends · Shift keeps it straight · Esc or right-click ends the run"
-              : "Drag a wall or its end points · drag empty space to pan · wheel to zoom · Delete removes the selected wall"}
+            <strong>{storey.name}</strong> · {STATUS[tool]}
           </p>
         </div>
         <aside className="sidebar">
@@ -304,10 +388,26 @@ export function App() {
             }}
             onOpenStorey={openStorey}
           />
+          <PlanChecksPanel
+            storey={storey}
+            issues={storeyPlanIssues}
+            onOpen={(issue) => issue.spaceId && setSelection({ kind: "space", id: issue.spaceId })}
+          />
           <PropertiesPanel storey={storey} selection={selection} onChange={(s) => setStorey(s)} />
+          <ApartmentsPanel
+            storey={storey}
+            infos={apartmentInfos}
+            byApartment={byApartment}
+            config={areaConfig}
+            colorOf={colorOf}
+            selection={selection}
+            onChange={(s, record) => setStorey(s, record)}
+            onSelect={setSelection}
+          />
           <AreaTable
             storey={storey}
             areas={areas}
+            byApartment={byApartment}
             buildingAreas={buildingAreas}
             config={areaConfig}
             onSelectStorey={openStorey}
