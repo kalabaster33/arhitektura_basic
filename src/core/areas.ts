@@ -2,7 +2,8 @@
  * Net / useful / gross areas of a storey. What each of the three means is not
  * decided here: it comes from an AreaConfig (src/config/areaDefinitions.json).
  */
-import type { SpaceType, Storey } from "./model.ts";
+import { sortedStoreys } from "./building.ts";
+import type { Building, SpaceType, Storey } from "./model.ts";
 import { linkSpaces } from "./spaces.ts";
 
 export type Boundary = "wallInnerFace" | "wallCentreline";
@@ -93,6 +94,24 @@ export function computeStoreyAreas(storey: Storey, config: AreaConfig): StoreyAr
       config.gross.storey === "wallOuterFace" ? outline.outerFaceArea : outline.centrelineArea;
   }
   return { spaces, totals };
+}
+
+export interface BuildingAreas {
+  /** Lowest storey first. */
+  storeys: { storeyId: string; name: string; elevation: number; totals: StoreyAreas["totals"] }[];
+  totals: StoreyAreas["totals"];
+}
+
+export function computeBuildingAreas(building: Building, config: AreaConfig): BuildingAreas {
+  const totals = { net: 0, useful: 0, gross: 0 };
+  const storeys = sortedStoreys(building).map((s) => {
+    const t = computeStoreyAreas(s, config).totals;
+    totals.net += t.net;
+    totals.useful += t.useful;
+    totals.gross += t.gross;
+    return { storeyId: s.id, name: s.name, elevation: s.elevation, totals: t };
+  });
+  return { storeys, totals };
 }
 
 export function formatArea(value: number, config: AreaConfig): string {

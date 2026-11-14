@@ -60,8 +60,12 @@ export function createSampleProject(
   return replaceStorey(project, syncSpaces(storey));
 }
 
-/** Milestone 1 edits one storey: the first storey of the first building. */
-export function getActiveStorey(project: Project): Storey {
+/** The storey with this id, or the first storey of the first building. */
+export function getActiveStorey(project: Project, storeyId?: string): Storey {
+  for (const b of project.site.buildings) {
+    const found = b.storeys.find((s) => s.id === storeyId);
+    if (found) return found;
+  }
   return project.site.buildings[0].storeys[0];
 }
 

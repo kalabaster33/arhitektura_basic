@@ -10,7 +10,7 @@
  */
 import { interiorPoint, pointInPolygon } from "./geometry.ts";
 import { newId } from "./ids.ts";
-import type { Space, Storey } from "./model.ts";
+import type { CirculationElement, CirculationKind, Space, Storey } from "./model.ts";
 import { type Face, type Topology, buildTopology } from "./topology.ts";
 
 export interface LinkedSpaces {
@@ -97,13 +97,36 @@ export function syncSpaces(storey: Storey, makeId: (prefix: string) => string = 
   spaces.sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity));
 
   const alive = new Set(spaces.map((s) => s.id));
-  return {
-    ...storey,
-    spaces,
-    apartments: storey.apartments.map((a) => ({
-      ...a,
-      spaceIds: a.spaceIds.filter((id) => alive.has(id)),
-    })),
-    circulation: storey.circulation.filter((c) => !c.spaceId || alive.has(c.spaceId)),
-  };
+  return syncCirculation(
+    {
+      ...storey,
+      spaces,
+      apartments: storey.apartments.map((a) => ({
+        ...a,
+        spaceIds: a.spaceIds.filter((id) => alive.has(id)),
+      })),
+    },
+    makeId,
+  );
+}
+
+const CIRCULATION_KINDS: CirculationKind[] = ["stair", "elevator", "shaft", "corridor"];
+
+/**
+ * Keeps the storey's circulation list in step with its spaces: one element for
+ * every space typed stair, elevator, shaft or corridor. Elements that are not
+ * tied to a space are left alone.
+ */
+export function syncCirculation(
+  storey: Storey,
+  makeId: (prefix: string) => string = newId,
+): Storey {
+  const bySpace = new Map(storey.circulation.filter((c) => c.spaceId).map((c) => [c.spaceId, c]));
+  const circulation: CirculationElement[] = storey.circulation.filter((c) => !c.spaceId);
+  for (const space of storey.spaces) {
+    const kind = CIRCULATION_KINDS.find((k) => k === space.type);
+    if (!kind) continue;
+    circulation.push({ id: bySpace.get(space.id)?.id ?? makeId("circulation"), kind, spaceId: space.id });
+  }
+  return { ...storey, circulation };
 }

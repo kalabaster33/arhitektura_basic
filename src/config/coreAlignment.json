@@ -1,0 +1,6 @@
+{
+  "_status": "TO BE VERIFIED BY A LICENSED ENGINEER. The tolerance is a drawing tolerance chosen for the editor, not a value from any standard or building code.",
+  "_doc": "coreSpaceTypes: the space types that form the vertical core and must line up from floor to floor. tolerance: how far (metres) the outline of a core space may differ from the one directly above or below before a warning is shown. Outlines are compared at the inside wall faces.",
+  "coreSpaceTypes": ["stair", "elevator", "shaft"],
+  "tolerance": 0.01
+}

@@ -13,7 +13,7 @@ import {
 } from "./geometry.ts";
 import { newId } from "./ids.ts";
 import type { Space, Storey, Wall, WallKind } from "./model.ts";
-import { syncSpaces } from "./spaces.ts";
+import { syncCirculation, syncSpaces } from "./spaces.ts";
 
 /**
  * Keeps T-junctions together. A wall end that sat somewhere along another wall
@@ -141,5 +141,8 @@ export function updateSpace(
   id: string,
   patch: Partial<Pick<Space, "name" | "type">>,
 ): Storey {
-  return { ...storey, spaces: storey.spaces.map((s) => (s.id === id ? { ...s, ...patch } : s)) };
+  return syncCirculation({
+    ...storey,
+    spaces: storey.spaces.map((s) => (s.id === id ? { ...s, ...patch } : s)),
+  });
 }

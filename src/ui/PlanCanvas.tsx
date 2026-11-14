@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { addWall, moveNode, moveWall } from "../core/edit.ts";
 import { type Pt, dist, roundTo, samePoint, snapPoint } from "../core/geometry.ts";
-import type { Storey, WallKind } from "../core/model.ts";
+import type { Storey, Wall, WallKind } from "../core/model.ts";
 import type { Face } from "../core/topology.ts";
 
 export type Tool = "select" | "wall";
 export type Selection = { kind: "wall" | "space"; id: string } | null;
+
+/** Outline of a core space on the storey above or below, drawn over the plan. */
+export interface CoreGhost {
+  key: string;
+  outline: Pt[];
+  label: string;
+  /** True when it does not line up with this storey. */
+  bad: boolean;
+}
 
 interface Props {
   storey: Storey;
@@ -17,6 +26,11 @@ interface Props {
   snapStep: number;
   wallThickness: number;
   wallKind: WallKind;
+  /** Walls of the storey below, shown faintly for reference. */
+  underlay: Wall[];
+  coreGhosts: CoreGhost[];
+  /** Spaces on this storey that have a core alignment warning. */
+  flaggedSpaceIds: Set<string>;
   onChange: (storey: Storey, record: boolean) => void;
   onSelect: (selection: Selection) => void;
 }
@@ -281,13 +295,14 @@ export function PlanCanvas(props: Props) {
           const face = faceBySpaceId.get(space.id);
           if (!face) return null;
           const selected = selection?.kind === "space" && selection.id === space.id;
+          const flagged = props.flaggedSpaceIds.has(space.id);
           return (
             <path
               key={space.id}
               d={[face.netOuter, ...face.netHoles].map(ringPath).join("")}
               fillRule="evenodd"
-              className={`room room--${space.type}${selected ? " is-selected" : ""}`}
-              strokeWidth={selected ? 2 * px : 0}
+              className={`room room--${space.type}${selected ? " is-selected" : ""}${flagged ? " is-flagged" : ""}`}
+              strokeWidth={selected || flagged ? 2 * px : 0}
               pointerEvents={interactive ? "auto" : "none"}
               onPointerDown={(e) => {
                 if (e.button !== 0) return;
@@ -297,6 +312,20 @@ export function PlanCanvas(props: Props) {
             />
           );
         })}
+
+        {props.underlay.map((w) => (
+          <line
+            key={w.id}
+            x1={w.a.x}
+            y1={w.a.y}
+            x2={w.b.x}
+            y2={w.b.y}
+            strokeWidth={Math.max(w.thickness, 2 * px)}
+            strokeLinecap="square"
+            className="wall-underlay"
+            pointerEvents="none"
+          />
+        ))}
 
         {storey.walls.map((w) => (
           <line
@@ -346,6 +375,19 @@ export function PlanCanvas(props: Props) {
             </text>
           );
         })}
+
+        {props.coreGhosts.map((g) => (
+          <path
+            key={g.key}
+            d={ringPath(g.outline)}
+            strokeWidth={(g.bad ? 2 : 1.25) * px}
+            strokeDasharray={`${6 * px} ${4 * px}`}
+            className={`core-ghost${g.bad ? " is-bad" : ""}`}
+            pointerEvents="none"
+          >
+            <title>{g.label}</title>
+          </path>
+        ))}
 
         {selectedWall &&
           interactive &&
