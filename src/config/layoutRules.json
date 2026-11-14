@@ -1,0 +1,18 @@
+{
+  "_status": "TO BE VERIFIED BY A LICENSED ENGINEER. These sizes and shares are neutral starting values for the layout generator, not taken from any standard or building code. Check them against the rules that apply to the project.",
+  "_doc": "Rules the layout generator works to when it divides an apartment into a living room, a bedroom, a bathroom and, where needed, a corridor. Lengths in metres, areas in square metres, measured to the centrelines of the new partitions and the inside faces of the apartment's surrounding walls. minLivingWidth / minBedroomSide: narrowest acceptable dimension. maxBedroomAspect / maxBathroomAspect: longest side divided by shortest. corridorWidth: clear corridor width. minCorridorArea: leftovers smaller than this are merged into a neighbouring room. doorWidth: width of the doors it places. entranceClearance: radius around the entrance kept free as circulation. minLivingFacade / minBedroomFacade: length of exterior wall the room must have. bedroomShare / bathroomShare: target area as a share of the apartment, kept within bedroomAreaRange / bathroomAreaRange. When an apartment is too tight, the generator scales the minimum widths and facade lengths down to 85 % and then 70 % and says so.",
+  "minLivingWidth": 2.5,
+  "minBedroomSide": 2.5,
+  "maxBedroomAspect": 1.6,
+  "maxBathroomAspect": 2.0,
+  "corridorWidth": 1.0,
+  "minCorridorArea": 1.2,
+  "doorWidth": 0.9,
+  "entranceClearance": 1.1,
+  "minLivingFacade": 2.0,
+  "minBedroomFacade": 1.5,
+  "bedroomShare": 0.27,
+  "bedroomAreaRange": [9, 16],
+  "bathroomShare": 0.08,
+  "bathroomAreaRange": [3.5, 6]
+}

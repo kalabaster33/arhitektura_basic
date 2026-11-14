@@ -412,6 +412,13 @@ export function ApartmentsPanel(props: {
   byApartment: StoreyAreasByApartment;
   config: AreaConfig;
   colorOf: (apartmentId: string) => string;
+  /** Per apartment id: why a layout cannot be generated for it. Absent when it can. */
+  layoutBlockers: Map<string, string>;
+  /** The last attempt to generate a layout that found none. */
+  layoutError: { apartmentId: string; reason: string } | null;
+  /** True while a generated layout is being previewed. */
+  previewing: boolean;
+  onGenerate: (apartmentId: string) => void;
   selection: Selection;
   onChange: (s: Storey, record?: boolean) => void;
   onSelect: (s: Selection) => void;
@@ -431,6 +438,8 @@ export function ApartmentsPanel(props: {
             const net = props.byApartment.apartments.find((x) => x.apartmentId === a.id)?.totals.net ?? 0;
             const rooms = a.spaceIds.length;
             const entrances = info?.entrances.length ?? 0;
+            const blocker = props.layoutBlockers.get(a.id);
+            const failed = props.layoutError?.apartmentId === a.id ? props.layoutError.reason : null;
             return (
               <li key={a.id}>
                 <button
@@ -468,6 +477,21 @@ export function ApartmentsPanel(props: {
                     </>
                   )}
                 </small>
+                {!props.previewing && (
+                  <div className="apartments__layout">
+                    <button
+                      disabled={blocker !== undefined}
+                      onClick={() => props.onGenerate(a.id)}
+                    >
+                      Generate layout
+                    </button>
+                    {(blocker ?? failed) && (
+                      <small className={failed && !blocker ? "is-bad" : ""}>
+                        {blocker ? `Not possible yet: ${blocker}` : `No layout found: ${failed}`}
+                      </small>
+                    )}
+                  </div>
+                )}
               </li>
             );
           })}
@@ -481,6 +505,15 @@ export function ApartmentsPanel(props: {
       <p className="hint">
         Select a room and choose its apartment in the Room panel. A room is in one apartment at
         most; rooms in none count as common area.
+      </p>
+      <p className="hint">
+        Generate layout proposes a living room, a bedroom and a bathroom, with a corridor where
+        needed, and shows up to three options to choose from. It needs an entrance door and an
+        exterior wall, and does not add windows.
+      </p>
+      <p className="hint hint--warn">
+        Room sizes for generated layouts are placeholders — to be verified by a licensed engineer
+        (src/config/layoutRules.json).
       </p>
     </section>
   );

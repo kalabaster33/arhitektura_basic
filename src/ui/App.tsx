@@ -2,8 +2,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import areaDefinitions from "../config/areaDefinitions.json";
 import coreAlignment from "../config/coreAlignment.json";
 import editorDefaults from "../config/editorDefaults.json";
+import layoutRules from "../config/layoutRules.json";
 import roomChecks from "../config/roomChecks.json";
 import { describeApartments } from "../core/apartments.ts";
+import {
+  type LayoutProposal,
+  apartmentInteriorWalls,
+  buildLayoutInput,
+  parseLayoutRules,
+  proposeLayouts,
+} from "../core/autoLayout.ts";
 import {
   computeApartmentAreas,
   computeBuildingAreas,
@@ -55,6 +63,15 @@ import { useProjectStore } from "./useProjectStore.ts";
 const areaConfig = parseAreaConfig(areaDefinitions);
 const coreConfig = parseCoreConfig(coreAlignment);
 const roomCheckConfig = parseRoomCheckConfig(roomChecks);
+const layoutRuleSet = parseLayoutRules(layoutRules);
+
+/** Generated layouts being looked at before one is applied. */
+interface LayoutPreview {
+  storeyId: string;
+  apartmentId: string;
+  proposals: LayoutProposal[];
+  index: number;
+}
 
 /** Apartments are told apart on the plan by colour, in the order they were made. */
 const APARTMENT_COLORS = [
@@ -87,7 +104,13 @@ export function App() {
   const store = useProjectStore();
   const { project } = store;
   const [activeStoreyId, setActiveStoreyId] = useState<string>();
-  const storey = getActiveStorey(project, activeStoreyId);
+  const realStorey = getActiveStorey(project, activeStoreyId);
+  const [preview, setPreview] = useState<LayoutPreview | null>(null);
+  const [layoutError, setLayoutError] = useState<{ apartmentId: string; reason: string } | null>(null);
+  const previewing = preview !== null && preview.storeyId === realStorey.id;
+  // While a generated layout is previewed, the whole screen shows the storey
+  // as it would become; nothing is changed until it is applied.
+  const storey = previewing ? preview.proposals[preview.index].storey : realStorey;
   const building = findBuilding(project, storey.id)!;
   const [tool, setTool] = useState<Tool>("select");
   const [selection, setSelection] = useState<Selection>(null);
@@ -182,7 +205,59 @@ export function App() {
     openStorey(next.id);
   };
 
-  const setStorey = (next: Storey, record = true) => store.set(replaceStorey(project, next), record);
+  const setStorey = (next: Storey, record = true) => {
+    if (previewing) return; // a preview is looked at, not edited
+    store.set(replaceStorey(project, next), record);
+  };
+
+  // Any change to the project, or another storey, ends a preview: it was made for the plan as it was.
+  useEffect(() => {
+    setPreview(null);
+    setLayoutError(null);
+  }, [project, activeStoreyId]);
+
+  /** Why each apartment on this storey cannot be laid out automatically, if it cannot. */
+  const layoutBlockers = useMemo(() => {
+    const blockers = new Map<string, string>();
+    for (const a of realStorey.apartments) {
+      const built = buildLayoutInput(realStorey, a.id);
+      if (!built.ok) blockers.set(a.id, built.reason);
+    }
+    return blockers;
+  }, [realStorey]);
+
+  const generateLayout = (apartmentId: string) => {
+    const apartment = realStorey.apartments.find((a) => a.id === apartmentId);
+    if (!apartment) return;
+    const own = apartmentInteriorWalls(realStorey, apartmentId).length;
+    if (
+      own > 0 &&
+      !window.confirm(
+        `"${apartment.name}" has ${own} partition${own > 1 ? "s" : ""} of its own. A generated layout replaces ${own > 1 ? "them" : "it"}, with the doors in ${own > 1 ? "them" : "it"}. Continue?`,
+      )
+    ) {
+      return;
+    }
+    const result = proposeLayouts(realStorey, apartmentId, layoutRuleSet, {
+      partitionThickness: thickness.interior,
+      door: editorDefaults.openings.door,
+      snap: project.grid.snap,
+    });
+    if (!result.ok) {
+      setLayoutError({ apartmentId, reason: result.reason });
+      return;
+    }
+    setLayoutError(null);
+    setSelection(null);
+    setTool("select");
+    setPreview({ storeyId: realStorey.id, apartmentId, proposals: result.proposals, index: 0 });
+  };
+
+  const stepPreview = (by: number) =>
+    setPreview((p) => p && { ...p, index: (p.index + by + p.proposals.length) % p.proposals.length });
+  const applyPreview = () => {
+    if (previewing) store.set(replaceStorey(project, preview.proposals[preview.index].storey));
+  };
 
   // Latest values for the keyboard handler, which is attached once.
   const live = useRef({ store, storey, selection, setStorey });
@@ -204,8 +279,10 @@ export function App() {
       else if (!mod && key === "w") setTool("wall");
       else if (!mod && key === "d") setTool("door");
       else if (!mod && key === "n") setTool("window");
-      else if (e.key === "Escape") setSelection(null);
-      else if (
+      else if (e.key === "Escape") {
+        setSelection(null);
+        setPreview(null);
+      } else if (
         (e.key === "Delete" || e.key === "Backspace") &&
         (selection?.kind === "wall" || selection?.kind === "opening")
       ) {
@@ -331,7 +408,31 @@ export function App() {
       )}
 
       <main className="workspace">
-        <div className="canvas-wrap">
+        <div className={`canvas-wrap${previewing ? " is-previewing" : ""}`}>
+          {previewing && (
+            <div className="preview-bar" role="region" aria-label="Layout preview">
+              <strong>
+                Layout {preview.index + 1} of {preview.proposals.length}
+              </strong>
+              <span>
+                {storey.apartments.find((a) => a.id === preview.apartmentId)?.name} ·{" "}
+                {preview.proposals[preview.index].rooms.join(", ")}
+                {preview.proposals[preview.index].relaxation < 1 &&
+                  ` · tight: minimum sizes scaled to ${Math.round(preview.proposals[preview.index].relaxation * 100)} %`}
+              </span>
+              <span className="spacer" />
+              {preview.proposals.length > 1 && (
+                <div className="group">
+                  <button onClick={() => stepPreview(-1)}>Previous</button>
+                  <button onClick={() => stepPreview(1)}>Next</button>
+                </div>
+              )}
+              <button className="is-active" onClick={applyPreview}>
+                Apply
+              </button>
+              <button onClick={() => setPreview(null)}>Cancel</button>
+            </div>
+          )}
           <PlanCanvas
             storey={storey}
             faceBySpaceId={linked.faceBySpaceId}
@@ -350,7 +451,10 @@ export function App() {
             onSelect={setSelection}
           />
           <p className="status">
-            <strong>{storey.name}</strong> · {STATUS[tool]}
+            <strong>{storey.name}</strong> ·{" "}
+            {previewing
+              ? "Previewing a generated layout · nothing is changed until you press Apply · Esc cancels"
+              : STATUS[tool]}
           </p>
         </div>
         <aside className="sidebar">
@@ -400,6 +504,10 @@ export function App() {
             byApartment={byApartment}
             config={areaConfig}
             colorOf={colorOf}
+            layoutBlockers={layoutBlockers}
+            layoutError={layoutError}
+            previewing={previewing}
+            onGenerate={generateLayout}
             selection={selection}
             onChange={(s, record) => setStorey(s, record)}
             onSelect={setSelection}
