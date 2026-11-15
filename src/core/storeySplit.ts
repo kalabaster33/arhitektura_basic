@@ -236,6 +236,34 @@ export interface CorridorLayout {
   axes: ("long" | "short")[];
   /** Through the middle of the hall, flush with one of its sides inside it, or just outside it. */
   anchor: "centre" | "low" | "high" | "before" | "after";
+  /**
+   * Metres the corridor along the building ("long") stops short of the outside
+   * wall at each end beyond the hall; 0 or left out runs it to the wall. The block left at the end is
+   * divided like any other floor, its apartments entered from the corridor's
+   * head and its last stretch of side wall.
+   */
+  stop?: number;
+}
+
+/**
+ * Stop lengths tried by default: to the wall, one apartment width short (a
+ * single end apartment across the corridor's head), and half the building's
+ * depth short (an end block about square, for two corner apartments).
+ */
+function corridorStops(building: Building, storeyId: string, rules: SplitRules): number[] {
+  const ring = shellRing(building, storeyId);
+  if (ring.length < 3) return [0];
+  const xs = ring.map((p) => p.x);
+  const ys = ring.map((p) => p.y);
+  const depth = Math.min(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+  const snap = (v: number) => Math.round(v / rules.cellSize) * rules.cellSize;
+  return [...new Set([0, snap(rules.minApartmentWidth), snap(depth / 2)])].filter((s) => s >= 0);
+}
+
+/** The default corridor layouts, each tried at every stop length. */
+function corridorLayouts(stops: number[]): CorridorLayout[] {
+  // Only a corridor along the building is long enough to stop short.
+  return CORRIDOR_LAYOUTS.flatMap((l) => (l.axes.includes("long") ? stops.map((stop) => ({ ...l, stop })) : [l]));
 }
 
 const CORRIDOR_LAYOUTS: CorridorLayout[] = (["centre", "low", "high", "before", "after"] as const).flatMap((anchor) =>
@@ -305,11 +333,24 @@ function buildPlate(
                 ? lo + width / 2
                 : hi - width / 2;
       const mid = Math.round((centre - (alongX ? oy : ox)) / cell);
+      // Stopping short: along the band, cells this close to either end of the
+      // building stay free, but never between the hall's own two sides.
+      const stop = axis === "long" ? (layout.stop ?? 0) : 0;
+      const endLo = (alongX ? Math.min(...xs) : Math.min(...ys)) + stop;
+      const endHi = (alongX ? Math.max(...xs) : Math.max(...ys)) - stop;
+      const hallLo = alongX ? hall.min.x : hall.min.y;
+      const hallHi = alongX ? hall.max.x : hall.max.y;
       for (let i = 0; i < kind.length; i++) {
         if (kind[i] !== FREE) continue;
         const x = i % nx;
-        const c = alongX ? (i - x) / nx : x;
-        if (c >= mid - half && c < mid + half) kind[i] = CORR;
+        const y = (i - x) / nx;
+        const c = alongX ? y : x;
+        if (c < mid - half || c >= mid + half) continue;
+        if (stop > 0) {
+          const a = alongX ? ox + (x + 0.5) * cell : oy + (y + 0.5) * cell;
+          if ((a < endLo && a < hallLo) || (a > endHi && a > hallHi)) continue;
+        }
+        kind[i] = CORR;
       }
     }
     // Only stretches of the band that reach the hall are corridor.
@@ -1181,7 +1222,9 @@ export function proposeSplits(
   const attempts: { mode: Access; layout?: CorridorLayout }[] = [];
   for (const mode of modes) {
     if (mode === "hall") attempts.push({ mode });
-    else for (const layout of options.corridorLayouts ?? CORRIDOR_LAYOUTS) attempts.push({ mode, layout });
+    else for (const layout of options.corridorLayouts ?? corridorLayouts(corridorStops(building, storey.id, rules))) {
+      attempts.push({ mode, layout });
+    }
   }
   const seenPlates = new Set<string>();
   const seenPlans = new Set<string>();

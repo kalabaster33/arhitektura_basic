@@ -126,6 +126,33 @@ describe("storey generator", () => {
     }
   });
 
+  it("stops the corridor short of the ends when end apartments fit better there", { timeout: 30000 }, () => {
+    // Six apartments on a 44 m slab: a corridor run to both end walls leaves
+    // no way to cut the floor; stopped short, the end blocks take the corner flats.
+    const { building, storey } = upper(
+      block(44, 12, [
+        ["hall", 20, 4.5, 24, 7.5],
+        ["stair", 20, 7.5, 23, 11.875],
+        ["elevator", 23, 7.5, 24.6, 9.5],
+      ]),
+    );
+    const mix = [unit("Two", 80, 4, 2), unit("One", 60, 2)];
+    const toWalls = proposeSplits(building, storey, mix, "corridor", rules, 1, {
+      corridorLayouts: [{ axes: ["long"], anchor: "centre" }],
+    });
+    expect(toWalls.ok).toBe(false);
+    const result = proposeSplits(building, storey, mix, "corridor", rules, 1);
+    if (!result.ok) throw new Error(result.reason);
+    const best = result.proposals[0];
+    expect(best.storey.apartments).toHaveLength(6);
+    const linked = linkSpaces(best.storey);
+    const corridor = best.storey.spaces.filter((s) => s.type === "corridor" && s.name.startsWith("Corridor"));
+    const xs = corridor.flatMap((c) => linked.faceBySpaceId.get(c.id)!.outer.map((p) => p.x));
+    // It reaches neither end wall.
+    expect(Math.min(...xs)).toBeGreaterThan(2);
+    expect(Math.max(...xs)).toBeLessThan(42);
+  });
+
   it("replaces the apartments and walls drawn on the storey before", () => {
     const { building, storey } = upper(pointBlock());
     const first = proposeSplits(building, storey, [unit("One", 50, 4)], "hall", rules);
