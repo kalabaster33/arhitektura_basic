@@ -164,32 +164,55 @@ export function offsetRingLeft(ring: Pt[], d: number[], miterLimit = 4): Pt[] {
  * handful of scanlines.
  */
 export function interiorPoint(outer: Pt[], holes: Pt[][] = []): Pt {
+  // Candidates: the middle of every inside span along a few horizontal and
+  // vertical scanlines (spans pair up the crossings, so each lies inside).
+  // The one farthest from any edge wins, which keeps it clear of the walls in
+  // L-, U- and C-shaped rooms where the widest span may hug a wall.
+  const rings = [outer, ...holes];
+  let minX = Infinity;
+  let maxX = -Infinity;
   let minY = Infinity;
   let maxY = -Infinity;
   for (const p of outer) {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
     minY = Math.min(minY, p.y);
     maxY = Math.max(maxY, p.y);
   }
-  const rings = [outer, ...holes];
-  let best: Pt = outer[0] ?? { x: 0, y: 0 };
-  let bestWidth = -1;
-  for (const f of [0.5, 0.35, 0.65, 0.2, 0.8]) {
-    // The irrational nudge keeps the scanline off vertices on a snapped grid.
-    const y = minY + (maxY - minY) * f + 1.2345e-7;
-    const xs: number[] = [];
+  const clearance = (p: Pt): number => {
+    let d = Infinity;
     for (const ring of rings) {
-      for (let i = 0; i < ring.length; i++) {
-        const a = ring[i];
-        const b = ring[(i + 1) % ring.length];
-        if (a.y > y !== b.y > y) xs.push(a.x + ((y - a.y) / (b.y - a.y)) * (b.x - a.x));
-      }
+      for (let i = 0; i < ring.length; i++) d = Math.min(d, distToSegment(p, ring[i], ring[(i + 1) % ring.length]));
     }
-    xs.sort((p, q) => p - q);
-    for (let i = 0; i + 1 < xs.length; i += 2) {
-      const width = xs[i + 1] - xs[i];
-      if (width > bestWidth) {
-        bestWidth = width;
-        best = { x: (xs[i] + xs[i + 1]) / 2, y };
+    return d;
+  };
+  let best: Pt = outer[0] ?? { x: 0, y: 0 };
+  let bestScore = -1;
+  for (const vertical of [false, true]) {
+    const lo = vertical ? minX : minY;
+    const hi = vertical ? maxX : maxY;
+    for (const f of [0.5, 0.35, 0.65, 0.2, 0.8]) {
+      // The irrational nudge keeps the scanline off vertices on a snapped grid.
+      const c = lo + (hi - lo) * f + 1.2345e-7;
+      const cuts: number[] = [];
+      for (const ring of rings) {
+        for (let i = 0; i < ring.length; i++) {
+          const a = ring[i];
+          const b = ring[(i + 1) % ring.length];
+          const [ac, bc, as, bs] = vertical ? [a.x, b.x, a.y, b.y] : [a.y, b.y, a.x, b.x];
+          if (ac > c !== bc > c) cuts.push(as + ((c - ac) / (bc - ac)) * (bs - as));
+        }
+      }
+      cuts.sort((p, q) => p - q);
+      for (let i = 0; i + 1 < cuts.length; i += 2) {
+        if (!(cuts[i + 1] > cuts[i])) continue;
+        const m = (cuts[i] + cuts[i + 1]) / 2;
+        const p = vertical ? { x: c, y: m } : { x: m, y: c };
+        const score = clearance(p);
+        if (score > bestScore) {
+          bestScore = score;
+          best = p;
+        }
       }
     }
   }

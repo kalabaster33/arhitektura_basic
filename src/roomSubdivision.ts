@@ -304,6 +304,33 @@ export function subdivideApartment(
   return layouts[0];
 }
 
+/**
+ * Why the facade alone rules the programme out, or null when it might fit.
+ * Every living room, bedroom and separate kitchen owns its own stretch of
+ * facade, so their minimums at the most they may relax must add up to no
+ * more than the facade there is. Cheap, and checked before any search.
+ */
+export function facadeShortfall(input: ApartmentInput, options: Partial<SubdivisionOptions> = {}): string | null {
+  const opts = { ...DEFAULT_OPTIONS, ...options };
+  const prog = normalizeProgram(opts.program);
+  const n = input.polygon.length;
+  let have = 0;
+  for (const i of input.facadeEdges) have += dist(input.polygon[i], input.polygon[(i + 1) % n]);
+  const need =
+    (opts.minLivingFacade +
+      prog.bedrooms * opts.minBedroomFacade +
+      (prog.kitchen === "separate" ? opts.minKitchenFacade : 0)) *
+    FACADE_RELAX_FLOOR;
+  // One search cell of slack: the grid may count a little more facade than the outline has.
+  if (need <= have + opts.cellSize) return null;
+  return (
+    `The facade is ${have.toFixed(1)} m, but the living room` +
+    (prog.bedrooms > 0 ? `, ${prog.bedrooms} bedroom${prog.bedrooms > 1 ? "s" : ""}` : "") +
+    (prog.kitchen === "separate" ? " and the kitchen" : "") +
+    ` need at least ${need.toFixed(1)} m of it.`
+  );
+}
+
 /** Up to `count` distinct layouts, best first. */
 export function generateLayouts(
   input: ApartmentInput,
@@ -314,6 +341,7 @@ export function generateLayouts(
   opts.program = normalizeProgram(opts.program);
   if (input.polygon.length < 3) throw new Error("Polygon needs at least 3 vertices.");
   if (input.facadeEdges.length === 0) throw new Error("At least one facade edge is required.");
+  if (facadeShortfall(input, opts)) return [];
 
   const grid = buildGrid(input, opts);
   const ratio = opts.refineCellSize > 0 ? Math.round(opts.cellSize / opts.refineCellSize) : 1;

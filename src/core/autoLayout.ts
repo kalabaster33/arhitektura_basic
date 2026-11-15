@@ -26,6 +26,7 @@ import {
   SIZED_ROOMS,
   type SizedRoom,
   type SubdivisionOptions,
+  facadeShortfall,
   generateLayouts,
 } from "../roomSubdivision.ts";
 import { describeApartments } from "./apartments.ts";
@@ -538,6 +539,8 @@ export function proposeLayouts(
   if (!built.ok) return built;
   const engineOptions = { ...rules, ...(program ? { program } : {}), wallThickness: 0, kitchen: false };
   // The old windows would block or straddle the new partitions.
+  const shortfall = facadeShortfall(built.input, engineOptions);
+  if (shortfall) return { ok: false, reason: `${shortfall} Try fewer rooms or a wider facade.` };
   const shell = options.windows ? removeRoomWindows(built.shell, [built.spaceId]) : built.shell;
   const proposals: LayoutProposal[] = [];
   let layouts: Layout[] = [];

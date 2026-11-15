@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import layoutRules from "../config/layoutRules.json";
-import { type AdjacencyRule, type Layout, generateLayouts } from "../roomSubdivision.ts";
+import { type AdjacencyRule, type Layout, facadeShortfall, generateLayouts } from "../roomSubdivision.ts";
 import { parseLayoutRules, resolveLayoutRules, rulesDoc } from "./autoLayout.ts";
 import { createProject, parseProject, serializeProject } from "./project.ts";
 
@@ -93,6 +93,29 @@ describe("layout rules", { timeout: 30000 }, () => {
     for (const room of layout.rooms.filter((r) => r.type === "bedroom")) {
       expect(doorOf(layout, room.id).map((id) => typeOf(layout, id))).not.toContain("living");
     }
+  });
+});
+
+describe("facade pre-check", () => {
+  // 4 m of facade on a 4 x 14 m plan.
+  const input = {
+    polygon: [
+      { x: 0, y: 0 },
+      { x: 4, y: 0 },
+      { x: 4, y: 14 },
+      { x: 0, y: 14 },
+    ],
+    facadeEdges: [0],
+    entrance: { x: 2, y: 14 },
+  };
+  it("rules out a programme whose rooms need more facade than there is", () => {
+    const options = { program: { bedrooms: 3, bathrooms: 1, wc: 0, storage: 0, kitchen: "open" as const } };
+    expect(facadeShortfall(input, options)).toMatch(/facade is 4\.0 m/);
+    expect(generateLayouts(input, options)).toEqual([]);
+  });
+  it("lets a programme through when the facade could hold it", () => {
+    const options = { program: { bedrooms: 1, bathrooms: 1, wc: 0, storage: 0, kitchen: "open" as const } };
+    expect(facadeShortfall(input, options)).toBeNull();
   });
 });
 
