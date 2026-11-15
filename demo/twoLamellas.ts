@@ -8,7 +8,8 @@
  *   - A 4.4 m passage through the ground floor between the lamellas; the
  *     upper floors bridge it (the erkers of the lamellas' inner ends).
  *   - Corridor access; the two corners at each lamella's outer end are
- *     three-bedroom flats of about 80 m2, the rest two-bedroom flats (see TWO_BED).
+ *     three-bedroom flats of about 80 m2; the rest are one-bedroom flats of
+ *     about 50 m2 on the upper floors and two-bedroom flats on the ground floor.
  *   - Ground-floor flats get 5 m deep private yards.
  *   - North 45 degrees counter-clockwise from the top of the plan.
  *
@@ -79,14 +80,19 @@ const PASS_A = LAMELLA - ERKER - T / 2;
 const PASS_B = LAMELLA + ERKER + T / 2;
 const PARTY = 0.25; // wall between the lamellas
 /**
- * Wanted size of the two-bedroom flats. The brief asks for about 50 m2, but
- * the flats of the 18 m deep upper floors are about 8 m deep, and a living
- * room and two bedrooms side by side on the facade need about 8 m of it:
- * below about 62 m2 the layout generator finds no two-bedroom layout there.
- * The ground floor is 13.6 m deep, its flats about 5.8 m: 50 to 54 m2 works.
+ * The flats besides the corners. On the 18 m deep upper floors the flats are
+ * about 8 m deep: a two-bedroom flat needs a living room and two bedrooms side
+ * by side on the facade, about 8 m of it, so below about 62 m2 none fits.
+ * There the flats are one-bedroom flats of about 50 m2. The ground floor is
+ * 13.6 m deep, its flats about 5.8 m: two-bedroom flats of 50 to 54 m2 fit.
  */
-const TWO_BED = Number(process.env.TWO_BED ?? 64);
-const TWO_BED_GROUND = Number(process.env.TWO_BED_GROUND ?? 54);
+interface Flat {
+  name: string;
+  area: number;
+  bedrooms: number;
+}
+const UPPER_FLAT: Flat = { name: "One-bedroom", area: Number(process.env.UPPER_AREA ?? 50), bedrooms: 1 };
+const GROUND_FLAT: Flat = { name: "Two-bedroom", area: Number(process.env.GROUND_AREA ?? 54), bedrooms: 2 };
 /**
  * Three-bedroom corner flats per lamella on the ground floor. Its north-west
  * side is cut by the core into two pieces of only 5.8 m depth, too shallow for
@@ -193,7 +199,7 @@ function splitLamella(block: Project, storeyIndex: number, mix: UnitType[], blin
   const b = block.site.buildings[0];
   const storey = sortedStoreys(b)[storeyIndex];
   const t0 = Date.now();
-  // The solver scales every flat to fill the floor: fewer two-bedroom flats
+  // The solver scales every flat to fill the floor: fewer of the other flats
   // until they come out near the wanted size (and the plan divides at all).
   // The corridor along the lamella, flush with the far side of the hall: in the middle of the depth.
   const opts = {
@@ -207,8 +213,8 @@ function splitLamella(block: Project, storeyIndex: number, mix: UnitType[], blin
       const twos = result.proposals[0].apartments.filter((a) => a.unitType === mix[1].name);
       const mean = twos.reduce((sum, a) => sum + a.area, 0) / twos.length;
       if (mean >= want - 2) break;
-      log(`  ${label}: ${n + 1} two-bedroom flats come out at ${fmt(mean)} m2, trying ${n}`);
-    } else log(`  ${label}: no plan with ${n + 1} two-bedroom flats, trying ${n}`);
+      log(`  ${label}: ${n + 1} ${mix[1].name} flats come out at ${fmt(mean)} m2, trying ${n}`);
+    } else log(`  ${label}: no plan with ${n + 1} ${mix[1].name} flats, trying ${n}`);
     result = proposeSplits(b, storey, [mix[0], { ...mix[1], count: n }], "corridor", rules, 1, opts);
   }
   if (!result.ok) throw new Error(`${label}: ${result.reason}`);
@@ -261,13 +267,13 @@ function transplant(target: Storey, source: Storey, letter: "A" | "B", snapY: [n
   return { ...s, apartments: [...s.apartments, ...apartments] };
 }
 
-/** Corner flats of 80 m2 and as many two-bedroom flats of the given size as fill the rest. */
-function mixFor(usable: number, corridor: number, twoBed: number, corners: number): UnitType[] {
+/** Corner flats of 80 m2 and as many of the other flats as fill the rest. */
+function mixFor(usable: number, corridor: number, flat: Flat, corners: number): UnitType[] {
   const left = usable - corridor - corners * 80;
-  const twos = Math.max(1, Math.round(left / twoBed));
+  const count = Math.max(1, Math.round(left / flat.area));
   return [
     { name: "Three-bedroom corner", area: 80, count: corners, program: prog(3), corner: true },
-    { name: "Two-bedroom", area: twoBed, count: twos, program: prog(2) },
+    { name: flat.name, area: flat.area, count, program: prog(flat.bedrooms) },
   ];
 }
 
@@ -296,10 +302,10 @@ for (const [letter, ground, upper, innerGround, innerUpper] of [
     const storey = sortedStoreys(b)[index];
     const usable = usableArea(b, storey.id, rules)!;
     const length = index === 0 ? LAMELLA - 2 * ERKER : LAMELLA;
-    const twoBed = index === 0 ? TWO_BED_GROUND : TWO_BED;
+    const flat = index === 0 ? GROUND_FLAT : UPPER_FLAT;
     const corners = index === 0 ? GROUND_CORNERS : 2;
-    const mix = mixFor(usable, 1.8 * length, twoBed, corners);
-    log(`Lamella ${letter}, ${name}: ${fmt(usable)} m2 for flats and corridor; mix ${corners} x 80 + ${mix[1].count} x ${twoBed}`);
+    const mix = mixFor(usable, 1.8 * length, flat, corners);
+    log(`Lamella ${letter}, ${name}: ${fmt(usable)} m2 for flats and corridor; mix ${corners} x 80 + ${mix[1].count} x ${flat.area} (${flat.name})`);
     plans[letter].push(splitLamella(block, index, mix, inner, `Lamella ${letter}, ${name}`));
   }
 }

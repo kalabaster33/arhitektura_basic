@@ -146,6 +146,8 @@ interface Plate {
   /** Facade sides facing along x (east / west) and along y (north / south). */
   satFacX: Int32Array;
   satFacY: Int32Array;
+  /** Cells at an outside corner: facade on a side facing x and on one facing y. */
+  satCorner: Int32Array;
   freeCells: number;
 }
 
@@ -379,6 +381,7 @@ function buildPlate(
       satFac: buildSat(nx, ny, fac),
       satFacX: buildSat(nx, ny, facX),
       satFacY: buildSat(nx, ny, facY),
+      satCorner: buildSat(nx, ny, facX.map((v, i) => (v > 0 && facY[i] > 0 ? 1 : 0))),
       freeCells,
     },
   };
@@ -438,6 +441,9 @@ function tight(p: Plate, b: Box): Box | null {
   return x0 < x1 && y0 < y1 ? { x0, y0, x1, y1 } : null;
 }
 
+/** Cost of a flat that wants a corner and does not get one. */
+const CORNER_COST = 20;
+
 /** Quick cost of one apartment in a box; Infinity when it plainly cannot work. */
 function leafCost(ctx: SearchContext, b: Box, type: number): number {
   const { plate: p, rules } = ctx;
@@ -466,7 +472,7 @@ function leafCost(ctx: SearchContext, b: Box, type: number): number {
   // A corner: facade on a side facing x and on one facing y.
   const atCorner =
     rectSum(p.satFacX, W, t.x0, t.y0, t.x1, t.y1) * c >= 1 && rectSum(p.satFacY, W, t.x0, t.y0, t.x1, t.y1) * c >= 1;
-  const cornerCost = ctx.corner[type] ? (atCorner ? 0 : 6.0) : ctx.corner.some(Boolean) && atCorner ? 1.5 : 0;
+  const cornerCost = ctx.corner[type] ? (atCorner ? 0 : CORNER_COST) : ctx.corner.some(Boolean) && atCorner ? 1.5 : 0;
   return (
     cornerCost +
     2.0 * (Math.abs(cells - target) / target) +
@@ -492,7 +498,10 @@ function groupCost(ctx: SearchContext, b: Box, items: number[]): number {
   const cells = freeIn(p, t);
   const fill = cells / ((t.x1 - t.x0) * (t.y1 - t.y0));
   const want = items.reduce((s, i) => s + ctx.target[i], 0);
-  return 1.5 * (1 - fill) + 2.0 * (Math.abs(cells - want) / want);
+  // Flats that want a corner need as many corners in the box.
+  const corners = items.filter((i) => ctx.corner[i]).length;
+  const missing = corners > 0 ? Math.max(0, corners - rectSum(p.satCorner, W, t.x0, t.y0, t.x1, t.y1)) : 0;
+  return 1.5 * (1 - fill) + 2.0 * (Math.abs(cells - want) / want) + CORNER_COST * missing;
 }
 
 /** Distinct sub-multisets of a sorted list, as sorted lists, without the empty and the full one. */
