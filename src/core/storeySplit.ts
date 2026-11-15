@@ -911,6 +911,91 @@ export function emptiedStorey(storey: Storey, building?: Building): Storey {
   return { ...base, apartments: [] };
 }
 
+/** Corridor kept past the last entrance door, beyond the door's own stretch of wall. */
+const CORRIDOR_END_MARGIN = 1.0;
+
+/**
+ * Cuts the dead ends off the corridor: the band is run out to the outside
+ * walls, so past the last entrance door it often leads nowhere. Those cells go
+ * to the apartment whose box holds them. Peeling only ever takes a cell that
+ * lies farthest from the hall among its corridor neighbours, so the rest of
+ * the corridor stays connected; cells near an entrance stretch are kept.
+ * Updates `lab` in place and returns the plate with the trimmed cells freed.
+ */
+function trimCorridor(p: Plate, lab: Int32Array, leaves: Box[], CORRIDOR_LABEL: number): Plate {
+  const { nx, ny, cell } = p;
+  const n = nx * ny;
+  const isCorr = (i: number) => lab[i] === CORRIDOR_LABEL;
+  const neighbours = (i: number): number[] => {
+    const x = i % nx;
+    const out: number[] = [];
+    if (x > 0) out.push(i - 1);
+    if (x < nx - 1) out.push(i + 1);
+    if (i >= nx) out.push(i - nx);
+    if (i + nx < n) out.push(i + nx);
+    return out;
+  };
+  const bfs = (seeds: number[], limit = Infinity): Float64Array => {
+    const d = new Float64Array(n).fill(Infinity);
+    const queue: number[] = [];
+    for (const s of seeds) if (d[s] === Infinity) (d[s] = 0), queue.push(s);
+    for (let h = 0; h < queue.length; h++) {
+      const i = queue[h];
+      if (d[i] >= limit) continue;
+      for (const j of neighbours(i)) {
+        if (isCorr(j) && d[j] === Infinity) (d[j] = d[i] + 1), queue.push(j);
+      }
+    }
+    return d;
+  };
+
+  // Distance from the hall along the corridor.
+  const hallSeeds: number[] = [];
+  for (let i = 0; i < n; i++) if (isCorr(i) && neighbours(i).some((j) => p.kind[j] === HALL)) hallSeeds.push(i);
+  if (hallSeeds.length === 0) return p;
+  const fromHall = bfs(hallSeeds);
+
+  // Corridor cells within reach of an entrance stretch are kept.
+  const keep = new Uint8Array(n);
+  for (const leaf of leaves) {
+    const set = new Set(leafCells(p, leaf));
+    const run = longestAccessRun(p, (i) => set.has(i), leaf);
+    if (!run || run.to !== CORR) continue;
+    const at = nudgeTowards(p, run.mid, CORR);
+    // nudgeTowards steps four half-cells in; one half-cell lands in the first corridor cell.
+    const back = { x: run.mid.x + (at.x - run.mid.x) / 4, y: run.mid.y + (at.y - run.mid.y) / 4 };
+    const cx = Math.floor((back.x - p.ox) / cell);
+    const cy = Math.floor((back.y - p.oy) / cell);
+    if (cx < 0 || cy < 0 || cx >= nx || cy >= ny || !isCorr(cy * nx + cx)) return p;
+    const reach = Math.ceil((run.len / 2 + CORRIDOR_END_MARGIN) / cell);
+    const d = bfs([cy * nx + cx], reach);
+    for (let i = 0; i < n; i++) if (d[i] <= reach) keep[i] = 1;
+  }
+  for (const s of hallSeeds) keep[s] = 1;
+
+  const owner = (i: number): number => {
+    const x = i % nx;
+    const y = Math.floor(i / nx);
+    return leaves.findIndex((l) => x >= l.x0 && x < l.x1 && y >= l.y0 && y < l.y1);
+  };
+  const kind = p.kind.slice();
+  let changed = false;
+  for (let again = true; again; ) {
+    again = false;
+    for (let i = 0; i < n; i++) {
+      if (!isCorr(i) || keep[i]) continue;
+      if (neighbours(i).some((j) => isCorr(j) && fromHall[j] > fromHall[i])) continue;
+      const k = owner(i);
+      if (k < 0 || !neighbours(i).some((j) => lab[j] === k)) continue;
+      lab[i] = k;
+      kind[i] = FREE;
+      changed = true;
+      again = true;
+    }
+  }
+  return changed ? { ...p, kind } : p;
+}
+
 /** Draws one solution on the emptied storey; null when it does not come out clean. */
 function draw(
   ctx: SearchContext,
@@ -919,7 +1004,8 @@ function draw(
   sol: Solution,
   access: Access,
 ): SplitProposal | null {
-  const { plate: p, rules } = ctx;
+  const { rules } = ctx;
+  let p = ctx.plate;
   const CORRIDOR_LABEL = 1_000_000;
   const lab = new Int32Array(p.kind.length).fill(-1);
   // Apartments are numbered around the plan.
@@ -931,6 +1017,7 @@ function draw(
     for (const i of leafCells(p, l)) lab[i] = k;
   });
   for (let i = 0; i < lab.length; i++) if (p.kind[i] === CORR) lab[i] = CORRIDOR_LABEL;
+  if (access === "corridor") p = trimCorridor(p, lab, leaves, CORRIDOR_LABEL);
 
   const boundary = base.walls.filter((w) => w.part);
   const lines = zoneWalls(p, lab, boundary);

@@ -752,11 +752,17 @@ const cellsFor = (g: Grid, m: number) => Math.max(1, Math.ceil(m / g.cell - 1e-9
 
 const isWet = (k: PrivateKind) => k === "bathroom" || k === "wc";
 
+/** Lowest scale applied to the facade minimums when a tight apartment relaxes its rules. */
+const FACADE_RELAX_FLOOR = 0.85;
+
 function deriveParams(g: Grid, opts: SubdivisionOptions, relax: number): Params {
   const area = g.insideCells * g.cell * g.cell;
   const clamp = (v: number, [lo, hi]: [number, number]) => Math.max(lo, Math.min(hi, v));
   const prog = opts.program;
   const shrink = relax < 1 ? relax : 1;
+  // Daylight is not traded away like sizes: facade minimums scale down at most
+  // to FACADE_RELAX_FLOOR, so a tight, deep plan does not get slit windows.
+  const facadeRelax = Math.max(relax, FACADE_RELAX_FLOOR);
 
   const sizeOf = (kind: PrivateKind, first: boolean): SizedRoom =>
     kind === "bedroom" ? (first ? "mainBedroom" : "bedroom") : kind;
@@ -773,7 +779,7 @@ function deriveParams(g: Grid, opts: SubdivisionOptions, relax: number): Params 
             minArea: 0.8 * target,
             maxArea: 1.25 * target,
             maxAspect: opts.maxBedroomAspect,
-            minFacade: opts.minBedroomFacade * relax,
+            minFacade: opts.minBedroomFacade * facadeRelax,
           };
         case "bathroom":
           return {
@@ -793,7 +799,7 @@ function deriveParams(g: Grid, opts: SubdivisionOptions, relax: number): Params 
             minArea: 0.8 * target,
             maxArea: 1.4 * target,
             maxAspect: 2.2,
-            minFacade: opts.minKitchenFacade * relax,
+            minFacade: opts.minKitchenFacade * facadeRelax,
           };
         case "storage":
           return { minSide: 1.0, maxSide: 2.5, minArea: 0.6 * target, maxArea: 1.5 * target, maxAspect: 2.5, minFacade: 0 };
@@ -854,7 +860,7 @@ function deriveParams(g: Grid, opts: SubdivisionOptions, relax: number): Params 
     kCorridor: cellsFor(g, opts.roomSizes.corridor.minWidth),
     doorCells: cellsFor(g, opts.doorWidth),
     minCorridorCells: Math.ceil(opts.minCorridorArea / (g.cell * g.cell)),
-    minLivingFacade: opts.minLivingFacade * relax,
+    minLivingFacade: opts.minLivingFacade * facadeRelax,
     minLivingArea,
     privates,
     corridor0: PRIVATE0 + privates.length,

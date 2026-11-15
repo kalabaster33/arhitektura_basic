@@ -102,14 +102,20 @@ export function buildTopology(walls: Wall[]): Topology {
   // 2. Nodes and edges of the planar graph.
   const nodes: Pt[] = [];
   const nodeIndex = new Map<string, number>();
+  // Points closer than NODE_TOL are one node, even when rounding puts them in
+  // neighbouring buckets (two points 0.01 mm apart either side of a bucket edge).
   const nodeOf = (p: Pt): number => {
-    const key = nodeKey(p);
-    let idx = nodeIndex.get(key);
-    if (idx === undefined) {
-      idx = nodes.length;
-      nodes.push(p);
-      nodeIndex.set(key, idx);
+    const bx = Math.round(p.x / NODE_TOL);
+    const by = Math.round(p.y / NODE_TOL);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const idx = nodeIndex.get(`${bx + dx},${by + dy}`);
+        if (idx !== undefined && dist(nodes[idx], p) <= NODE_TOL) return idx;
+      }
     }
+    const idx = nodes.length;
+    nodes.push(p);
+    nodeIndex.set(nodeKey(p), idx);
     return idx;
   };
   const half: HalfEdge[] = [];
