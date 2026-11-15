@@ -18,6 +18,7 @@
       "corridor": 1,
       "storage": 1,
       "balcony": 1,
+      "yard": 1,
       "stair": 1,
       "elevator": 1,
       "shaft": 1,
@@ -28,5 +29,7 @@
     "_doc": "space: gross area attributed to one space, 'wallCentreline' (net plus half of each surrounding wall) or 'wallInnerFace' (same as net). storey: gross area of the whole storey, 'wallOuterFace' (to the outside face of the outermost walls) or 'wallCentreline'.",
     "space": "wallCentreline",
     "storey": "wallOuterFace"
-  }
+  },
+  "_outdoorSpaceTypes": "Open-air space types, such as private yards in front of the ground floor: listed with their area but not counted in the storey's net, useful or gross area. TO BE VERIFIED BY A LICENSED ENGINEER.",
+  "outdoorSpaceTypes": ["yard"]
 }

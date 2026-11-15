@@ -177,6 +177,14 @@ export function StoreyPlanPanel(props: {
                 ×
               </button>
             </div>
+            <label className="check" title="Put these at the corners of the plan, where two facades meet">
+              <input
+                type="checkbox"
+                checked={u.corner === true}
+                onChange={(e) => update(i, { corner: e.target.checked || undefined })}
+              />
+              At the corners
+            </label>
             <details className="mix__rooms">
               <summary>{describeProgram(u.program)}</summary>
               <ProgramEditor program={u.program} onChange={(program) => update(i, { program })} />

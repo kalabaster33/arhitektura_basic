@@ -3,8 +3,9 @@
  * decided here: it comes from an AreaConfig (src/config/areaDefinitions.json).
  */
 import { sortedStoreys } from "./building.ts";
-import type { Building, SpaceType, Storey } from "./model.ts";
+import { type Building, SPACE_TYPES, type SpaceType, type Storey } from "./model.ts";
 import { linkSpaces } from "./spaces.ts";
+import { buildTopology } from "./topology.ts";
 
 export type Boundary = "wallInnerFace" | "wallCentreline";
 export type StoreyBoundary = "wallOuterFace" | "wallCentreline";
@@ -16,6 +17,8 @@ export interface AreaConfig {
   net: { boundary: Boundary };
   useful: { defaultFactor: number; factorBySpaceType: Partial<Record<SpaceType, number>> };
   gross: { space: Boundary; storey: StoreyBoundary };
+  /** Open-air space types (yards): listed with their area, left out of the storey totals. */
+  outdoorSpaceTypes: SpaceType[];
 }
 
 export interface SpaceAreas {
@@ -64,6 +67,9 @@ export function parseAreaConfig(raw: unknown): AreaConfig {
       factorBySpaceType: { ...c.useful.factorBySpaceType },
     },
     gross: { space: c.gross.space, storey: c.gross.storey },
+    outdoorSpaceTypes: Array.isArray((c as { outdoorSpaceTypes?: unknown }).outdoorSpaceTypes)
+      ? ((c as { outdoorSpaceTypes: SpaceType[] }).outdoorSpaceTypes.filter((t) => SPACE_TYPES.includes(t)))
+      : [],
   };
 }
 
@@ -71,6 +77,7 @@ export function computeStoreyAreas(storey: Storey, config: AreaConfig): StoreyAr
   const { topology, faceBySpaceId } = linkSpaces(storey);
   const spaces: SpaceAreas[] = [];
   const totals = { net: 0, useful: 0, gross: 0 };
+  let outdoor = false;
   for (const space of storey.spaces) {
     const face = faceBySpaceId.get(space.id);
     if (!face) continue;
@@ -86,10 +93,18 @@ export function computeStoreyAreas(storey: Storey, config: AreaConfig): StoreyAr
       useful,
       gross: measure(config.gross.space),
     });
+    if (config.outdoorSpaceTypes.includes(space.type)) {
+      // Open air: not floor area of the storey.
+      outdoor = true;
+      continue;
+    }
     totals.net += net;
     totals.useful += useful;
   }
-  for (const outline of topology.outlines) {
+  // With yards and their fences, the storey's outline is that of its outside walls.
+  const shell = storey.walls.filter((w) => w.kind === "exterior");
+  const outlines = outdoor && shell.length > 0 ? buildTopology(shell).outlines : topology.outlines;
+  for (const outline of outlines) {
     totals.gross +=
       config.gross.storey === "wallOuterFace" ? outline.outerFaceArea : outline.centrelineArea;
   }

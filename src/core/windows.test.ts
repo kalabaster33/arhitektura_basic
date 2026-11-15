@@ -125,3 +125,46 @@ describe("automatic windows", { timeout: 30000 }, () => {
     }
   });
 });
+
+describe("yards", () => {
+  it("leave the storey's areas and the building footprint alone", async () => {
+    const { computeStoreyAreas, parseAreaConfig } = await import("./areas.ts");
+    const { buildingFootprint } = await import("./site.ts");
+    const { applyWalls } = await import("./edit.ts");
+    const areaConfig = parseAreaConfig((await import("../config/areaDefinitions.json")).default);
+    const s = plan();
+    const before = computeStoreyAreas(s, areaConfig).totals;
+    // A 5 m yard in front of the south facade, fenced.
+    const fence = (a: { x: number; y: number }, b: { x: number; y: number }) => ({
+      id: `fence-${a.x}-${a.y}-${b.x}-${b.y}`,
+      a,
+      b,
+      thickness: 0.05,
+      kind: "interior" as const,
+    });
+    let y = applyWalls(s, [
+      ...s.walls,
+      fence({ x: 2, y: 13.875 }, { x: 2, y: 19 }),
+      fence({ x: 2, y: 19 }, { x: 8, y: 19 }),
+      fence({ x: 8, y: 19 }, { x: 8, y: 13.875 }),
+    ]);
+    const yard = y.spaces.find((x) => x.anchor.y > 14)!;
+    y = { ...y, spaces: y.spaces.map((x) => (x.id === yard.id ? { ...x, type: "yard" as const, name: "Yard" } : x)) };
+    const after = computeStoreyAreas(y, areaConfig).totals;
+    expect(after.net).toBeCloseTo(before.net, 6);
+    expect(after.gross).toBeCloseTo(before.gross, 1);
+    const area = (r: ReturnType<typeof buildingFootprint>) =>
+      r.reduce((sum, poly) => {
+        const ring = poly[0];
+        let a = 0;
+        for (let i = 0; i < ring.length; i++) {
+          const p = ring[i];
+          const q = ring[(i + 1) % ring.length];
+          a += p.x * q.y - q.x * p.y;
+        }
+        return sum + Math.abs(a) / 2;
+      }, 0);
+    const site = (st: typeof s) => ({ buildings: [{ id: "b", name: "b", storeys: [st], structure: undefined as never }] });
+    expect(area(buildingFootprint(site(y), "lowestStorey"))).toBeCloseTo(area(buildingFootprint(site(s), "lowestStorey")), 6);
+  });
+});

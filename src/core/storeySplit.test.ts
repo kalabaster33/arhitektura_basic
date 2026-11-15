@@ -220,3 +220,53 @@ describe("room programme", () => {
     expect(linkSpaces(laid).faceBySpaceId.size).toBe(laid.spaces.length);
   });
 });
+
+describe("storey generator options", () => {
+  it("puts corner types at the corners", { timeout: 20000 }, () => {
+    const { building, storey } = upper(slab());
+    const mix = [{ ...unit("Corner", 75, 2, 3), corner: true }, unit("Two", 55, 6, 2)];
+    const result = proposeSplits(building, storey, mix, "corridor", rules, 1);
+    if (!result.ok) throw new Error(result.reason);
+    const plan = result.proposals[0].storey;
+    const corners = describeApartments(plan).filter(
+      (i) => plan.apartments.find((a) => a.id === i.apartmentId)?.unitType === "Corner",
+    );
+    expect(corners).toHaveLength(2);
+    for (const info of corners) {
+      const n = info.outline.length;
+      const dirs = new Set(
+        info.facadeEdges.map((e) => (Math.abs(info.outline[e].x - info.outline[(e + 1) % n].x) < 1e-6 ? "x" : "y")),
+      );
+      expect(dirs.size).toBe(2);
+    }
+  });
+
+  it("gives no facade on a party wall", () => {
+    const { building, storey } = upper(pointBlock());
+    const mix = [unit("Two", 65, 2, 2), unit("One", 50, 2)];
+    expect(proposeSplits(building, storey, mix, "hall", rules, 1).ok).toBe(true);
+    // Every side a party wall: no flat has daylight, so there is no plan.
+    const ring: [{ x: number; y: number }, { x: number; y: number }][] = [
+      [{ x: 0.125, y: -1 }, { x: 0.125, y: 15 }],
+      [{ x: 19.875, y: -1 }, { x: 19.875, y: 15 }],
+      [{ x: -1, y: 0.125 }, { x: 21, y: 0.125 }],
+      [{ x: -1, y: 13.875 }, { x: 21, y: 13.875 }],
+    ];
+    expect(proposeSplits(building, storey, mix, "hall", rules, 1, { blind: ring }).ok).toBe(false);
+  });
+
+  it("tries only the corridor layouts it is given", { timeout: 20000 }, () => {
+    const { building, storey } = upper(slab());
+    const mix = [unit("Two", 60, 4, 2), unit("One", 45, 4)];
+    const result = proposeSplits(building, storey, mix, "corridor", rules, 3, {
+      corridorLayouts: [{ axes: ["long"], anchor: "centre" }],
+    });
+    if (!result.ok) throw new Error(result.reason);
+    // One plate: every proposal has the same corridor.
+    const corridor = (i: number) => {
+      const s = result.proposals[i].storey;
+      return s.spaces.filter((x) => x.type === "corridor").length;
+    };
+    for (let i = 0; i < result.proposals.length; i++) expect(corridor(i)).toBe(corridor(0));
+  });
+});

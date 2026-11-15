@@ -1643,3 +1643,4 @@ input.is-invalid {
 .rules__walk input {
   width: 64px;
 }
+.room--yard { fill: #e3efd9; }

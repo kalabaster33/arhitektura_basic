@@ -282,7 +282,9 @@ export function buildingFootprint(site: Pick<Site, "buildings">, mode: Footprint
   for (const building of site.buildings) {
     const storeys = mode === "lowestStorey" ? sortedStoreys(building).slice(0, 1) : building.storeys;
     for (const storey of storeys) {
-      for (const outline of buildTopology(storey.walls).outlines) {
+      // The outside walls make the outline; fences and other walls out in the open do not.
+      const shell = storey.walls.filter((w) => w.kind === "exterior");
+      for (const outline of buildTopology(shell.length > 0 ? shell : storey.walls).outlines) {
         if (outline.outerFace.length >= 3 && outline.outerFaceArea > 1e-9) {
           shapes.push(toPoly(outline.outerFace));
         }

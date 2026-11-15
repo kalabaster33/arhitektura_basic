@@ -24,7 +24,7 @@
  * them). Areas are measured to wall centrelines. No UI imports.
  */
 import { applyWalls, updateSpace } from "./edit.ts";
-import { type Pt, dist, lineIntersectionParams, offsetRingLeft, pointInPolygon, pointInRing } from "./geometry.ts";
+import { type Pt, dist, distToSegment, lineIntersectionParams, offsetRingLeft, pointInPolygon, pointInRing } from "./geometry.ts";
 import { newId } from "./ids.ts";
 import type { Apartment, ApartmentProgram, Building, Storey, Wall } from "./model.ts";
 import { type OpeningSize, addOpening, locateOnWall, openingSides } from "./openings.ts";
@@ -40,6 +40,20 @@ export interface UnitType {
   area: number;
   count: number;
   program: ApartmentProgram;
+  /** Put these at the corners of the plan, where two facades meet. */
+  corner?: boolean;
+}
+
+/** Extra settings for one run of the storey generator. */
+export interface SplitOptions {
+  /**
+   * Stretches of the outside wall that are not facade: a party wall against
+   * a neighbouring building or lamella. Apartments get no daylight there and
+   * a corner on them is no corner. Each is a segment along the wall.
+   */
+  blind?: [Pt, Pt][];
+  /** Only these corridor layouts are tried (corridor access); all of them when left out. */
+  corridorLayouts?: CorridorLayout[];
 }
 
 export interface SplitRules {
@@ -92,6 +106,7 @@ export function parseSplitRules(raw: unknown): SplitRules {
       area: u.area,
       count: typeof u.count === "number" && u.count >= 0 ? Math.round(u.count) : 0,
       program: normalizeProgramLoose(u.program),
+      ...(u.corner === true ? { corner: true } : {}),
     };
   });
   return {
@@ -128,6 +143,9 @@ interface Plate {
   satFree: Int32Array;
   satAcc: Int32Array;
   satFac: Int32Array;
+  /** Facade sides facing along x (east / west) and along y (north / south). */
+  satFacX: Int32Array;
+  satFacY: Int32Array;
   freeCells: number;
 }
 
@@ -212,7 +230,7 @@ function shellRing(building: Building, storeyId: string): Pt[] {
 type PlateResult = { ok: true; plate: Plate } | { ok: false; reason: string };
 
 /** Where a corridor runs: along which axes, and where across the hall it sits. */
-interface CorridorLayout {
+export interface CorridorLayout {
   axes: ("long" | "short")[];
   /** Through the middle of the hall, flush with one of its sides inside it, or just outside it. */
   anchor: "centre" | "low" | "high" | "before" | "after";
@@ -228,6 +246,7 @@ function buildPlate(
   rules: SplitRules,
   access: Access,
   layout: CorridorLayout = { axes: ["long"], anchor: "centre" },
+  blind: [Pt, Pt][] = [],
 ): PlateResult {
   const ring = shellRing(building, storeyId);
   if (ring.length < 3) return { ok: false, reason: "Draw the building outline first." };
@@ -316,15 +335,30 @@ function buildPlate(
 
   const acc = new Uint8Array(nx * ny);
   const fac = new Uint8Array(nx * ny);
+  const facX = new Uint8Array(nx * ny);
+  const facY = new Uint8Array(nx * ny);
+  // A side on a party wall is no facade.
+  const onBlind = (q: Pt) => blind.some(([a, b]) => distToSegment(q, a, b) <= 1.5 * cell);
   let freeCells = 0;
   for (let i = 0; i < kind.length; i++) {
     if (kind[i] !== FREE) continue;
     freeCells++;
     const x = i % nx;
-    for (const j of [x > 0 ? i - 1 : -1, x < nx - 1 ? i + 1 : -1, i - nx, i + nx]) {
+    const y = (i - x) / nx;
+    const sides: [number, number, number][] = [
+      [x > 0 ? i - 1 : -1, -0.5, 0],
+      [x < nx - 1 ? i + 1 : -1, 0.5, 0],
+      [i - nx, 0, -0.5],
+      [i + nx, 0, 0.5],
+    ];
+    for (const [j, dx, dy] of sides) {
       const k = j < 0 || j >= kind.length ? OUTSIDE : kind[j];
       if (k === HALL || k === CORR) acc[i]++;
-      if (k === OUTSIDE) fac[i]++;
+      if (k !== OUTSIDE) continue;
+      if (blind.length > 0 && onBlind({ x: ox + (x + 0.5 + dx) * cell, y: oy + (y + 0.5 + dy) * cell })) continue;
+      fac[i]++;
+      if (dx !== 0) facX[i]++;
+      else facY[i]++;
     }
   }
   const free = new Uint8Array(nx * ny);
@@ -343,6 +377,8 @@ function buildPlate(
       satFree: buildSat(nx, ny, free),
       satAcc: buildSat(nx, ny, acc),
       satFac: buildSat(nx, ny, fac),
+      satFacX: buildSat(nx, ny, facX),
+      satFacY: buildSat(nx, ny, facY),
       freeCells,
     },
   };
@@ -379,6 +415,8 @@ interface SearchContext {
   rules: SplitRules;
   /** Wanted cells per unit type, scaled so the whole floor is used. */
   target: number[];
+  /** Per unit type: wants a corner. */
+  corner: boolean[];
   memo: Map<string, Solution[]>;
   /** Strict checks of a box as one apartment, by box. */
   strict: Map<string, number>;
@@ -425,7 +463,12 @@ function leafCost(ctx: SearchContext, b: Box, type: number): number {
   if (strict === Infinity) return Infinity;
   const fill = cells / ((t.x1 - t.x0) * (t.y1 - t.y0));
   const aspect = Math.max(w, h) / Math.min(w, h);
+  // A corner: facade on a side facing x and on one facing y.
+  const atCorner =
+    rectSum(p.satFacX, W, t.x0, t.y0, t.x1, t.y1) * c >= 1 && rectSum(p.satFacY, W, t.x0, t.y0, t.x1, t.y1) * c >= 1;
+  const cornerCost = ctx.corner[type] ? (atCorner ? 0 : 6.0) : ctx.corner.some(Boolean) && atCorner ? 1.5 : 0;
   return (
+    cornerCost +
     2.0 * (Math.abs(cells - target) / target) +
     3.0 * (1 - fill) + // close to a rectangle
     1.0 * Math.max(0, aspect - 2.2) + // not a deep, narrow tube
@@ -1023,6 +1066,7 @@ export function proposeSplits(
   access: Access | "auto",
   rules: SplitRules,
   count = 3,
+  options: SplitOptions = {},
 ): SplitResult {
   const items: number[] = [];
   units.forEach((u, i) => {
@@ -1041,7 +1085,7 @@ export function proposeSplits(
   const attempts: { mode: Access; layout?: CorridorLayout }[] = [];
   for (const mode of modes) {
     if (mode === "hall") attempts.push({ mode });
-    else for (const layout of CORRIDOR_LAYOUTS) attempts.push({ mode, layout });
+    else for (const layout of options.corridorLayouts ?? CORRIDOR_LAYOUTS) attempts.push({ mode, layout });
   }
   const seenPlates = new Set<string>();
   const seenPlans = new Set<string>();
@@ -1049,7 +1093,7 @@ export function proposeSplits(
   for (const { mode, layout } of attempts) {
     // A plan reached from the hall alone needs no corridor.
     if (mode === "corridor" && access === "auto" && proposals.some((q) => q.access === "hall")) break;
-    const built = buildPlate(building, storey.id, rules, mode, layout);
+    const built = buildPlate(building, storey.id, rules, mode, layout, options.blind ?? []);
     if (!built.ok) {
       reason ||= built.reason;
       continue;
@@ -1072,6 +1116,7 @@ export function proposeSplits(
       plate,
       rules,
       target: units.map((u) => (u.area / rules.cellSize ** 2) * scale),
+      corner: units.map((u) => u.corner === true),
       memo: new Map(),
       strict: new Map(),
       budget: 6000,

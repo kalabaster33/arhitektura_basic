@@ -52,6 +52,7 @@ export const SPACE_TYPES = [
   "corridor",
   "storage",
   "balcony",
+  "yard",
   "stair",
   "elevator",
   "shaft",
