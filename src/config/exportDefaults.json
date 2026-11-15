@@ -1,0 +1,38 @@
+{
+  "_doc": "Starting values for export. Drawing conveniences only, not design rules. paper: sheet sizes in millimetres, short side first. scales / siteScales: the scales offered for storey plans and for the site plan (100 = 1:100). marginMm: blank edge of a PDF sheet. titleBlockMm: height of the title strip at the bottom of a sheet. textHeightMm: height of lettering on paper; in a DXF the lettering is sized so that it has this height when plotted at the chosen scale. lineWeightMm: line weight on paper per layer. layers: the DXF layer name and AutoCAD colour index (1 red, 2 yellow, 3 green, 4 cyan, 5 blue, 6 magenta, 7 black/white, 8 grey) of each kind of line. dxfGap: distance in metres between drawings laid side by side in one DXF file.",
+  "paper": {
+    "A4": [210, 297],
+    "A3": [297, 420]
+  },
+  "defaultPaper": "A3",
+  "scales": [50, 100, 200],
+  "defaultScale": 100,
+  "siteScales": [200, 500, 1000],
+  "defaultSiteScale": 200,
+  "marginMm": 10,
+  "titleBlockMm": 16,
+  "textHeightMm": 2.5,
+  "lineWeightMm": {
+    "walls": 0.35,
+    "doors": 0.18,
+    "windows": 0.18,
+    "rooms": 0.18,
+    "plot": 0.5,
+    "buildable": 0.25,
+    "footprint": 0.35,
+    "setbacks": 0.18,
+    "titles": 0.18
+  },
+  "layers": {
+    "walls": { "name": "A-WALL", "color": 7 },
+    "doors": { "name": "A-DOOR", "color": 4 },
+    "windows": { "name": "A-GLAZ", "color": 5 },
+    "rooms": { "name": "A-AREA-IDEN", "color": 8 },
+    "plot": { "name": "C-PROP", "color": 3 },
+    "buildable": { "name": "C-PROP-SETB", "color": 3 },
+    "footprint": { "name": "A-FOOTPRINT", "color": 6 },
+    "setbacks": { "name": "C-PROP-TEXT", "color": 3 },
+    "titles": { "name": "A-ANNO-TTLB", "color": 7 }
+  },
+  "dxfGap": 5
+}

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import areaDefinitions from "../config/areaDefinitions.json";
 import coreAlignment from "../config/coreAlignment.json";
 import editorDefaults from "../config/editorDefaults.json";
+import exportDefaults from "../config/exportDefaults.json";
 import layoutRules from "../config/layoutRules.json";
 import roomChecks from "../config/roomChecks.json";
 import siteRulesJson from "../config/siteRules.json";
@@ -43,7 +44,10 @@ import {
   serializeProject,
 } from "../core/project.ts";
 import { analyseSite, deleteBoundaryCorner, parseSiteRules, setBoundary } from "../core/site.ts";
+import { parseExportConfig } from "../core/sheets.ts";
 import { linkSpaces } from "../core/spaces.ts";
+import { download, fileBase } from "../export/download.ts";
+import { ExportDialog } from "./ExportDialog.tsx";
 import {
   type ApartmentTag,
   type CoreGhost,
@@ -68,6 +72,9 @@ const coreConfig = parseCoreConfig(coreAlignment);
 const roomCheckConfig = parseRoomCheckConfig(roomChecks);
 const layoutRuleSet = parseLayoutRules(layoutRules);
 const siteRules = parseSiteRules(siteRulesJson);
+const exportConfig = parseExportConfig(exportDefaults);
+/** Printed on the Notes sheet of an exported schedule. */
+const exportNotes = [areaDefinitions._status, siteRulesJson._status];
 
 /** Generated layouts being looked at before one is applied. */
 interface LayoutPreview {
@@ -123,6 +130,7 @@ export function App() {
   const [wallKind, setWallKind] = useState<WallKind>("exterior");
   const [thickness, setThickness] = useState(editorDefaults.wallThickness);
   const [error, setError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const linked = useMemo(() => linkSpaces(storey), [storey]);
@@ -274,13 +282,14 @@ export function App() {
   };
 
   // Latest values for the keyboard handler, which is attached once.
-  const live = useRef({ store, storey, selection, setStorey, project, setProject });
-  live.current = { store, storey, selection, setStorey, project, setProject };
+  const live = useRef({ store, storey, selection, setStorey, project, setProject, exporting });
+  live.current = { store, storey, selection, setStorey, project, setProject, exporting };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName)) return;
-      const { store, storey, selection, setStorey, project, setProject } = live.current;
+      const { store, storey, selection, setStorey, project, setProject, exporting } = live.current;
+      if (exporting) return; // the export dialog has the keyboard
       const mod = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
       if (mod && key === "z") {
@@ -320,12 +329,7 @@ export function App() {
   }, []);
 
   const save = () => {
-    const blob = new Blob([serializeProject(project)], { type: "application/json" });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = `${project.name.replace(/[^\w-]+/g, "_") || "project"}.arh.json`;
-    link.click();
-    URL.revokeObjectURL(link.href);
+    download(`${fileBase(project.name)}.arh.json`, serializeProject(project), "application/json");
   };
 
   const open = async (file: File | undefined) => {
@@ -407,6 +411,13 @@ export function App() {
           <button onClick={newProject}>New</button>
           <button onClick={() => fileInput.current?.click()}>Open…</button>
           <button onClick={save}>Save JSON</button>
+          <button
+            onClick={() => setExporting(true)}
+            disabled={previewing}
+            title="Export plans to PDF or DXF, or the area schedule to XLSX"
+          >
+            Export…
+          </button>
         </div>
         <input
           ref={fileInput}
@@ -419,6 +430,18 @@ export function App() {
           }}
         />
       </header>
+
+      {exporting && (
+        <ExportDialog
+          project={project}
+          areaConfig={areaConfig}
+          analysis={siteAnalysis}
+          config={exportConfig}
+          footprintRule={siteRules.footprint === "allStoreys" ? "all storeys seen from above" : "lowest storey only"}
+          notes={exportNotes}
+          onClose={() => setExporting(false)}
+        />
+      )}
 
       {error && (
         <div className="error" role="alert">
