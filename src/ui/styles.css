@@ -30,7 +30,7 @@ body {
 .app {
   height: 100%;
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto auto auto 1fr;
 }
 
 /* ---------------------------------------------------------------- toolbar */
@@ -157,7 +157,7 @@ input.is-invalid {
 /* -------------------------------------------------------------- workspace */
 
 .workspace {
-  grid-row: 3;
+  grid-row: 4;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
   min-height: 0;
@@ -1063,4 +1063,282 @@ input.is-invalid {
   fill: #3b3f47;
   font-weight: 700;
   font-size: 11px;
+}
+
+/* --------------------------------------------------------------- workflow */
+
+.stepper {
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.error {
+  grid-row: 3;
+}
+
+.stepper ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stepper li {
+  display: flex;
+  align-items: center;
+}
+
+.stepper li + li::before {
+  content: "";
+  width: 14px;
+  height: 1px;
+  margin-right: 4px;
+  background: var(--line);
+}
+
+.stepper li button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 999px;
+  padding: 0 12px 0 4px;
+}
+
+.stepper__number {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.stepper li button.is-active .stepper__number {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.stepper__blocker {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.stepper__next {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.stepper__blocker + .stepper__next {
+  margin-left: 0;
+}
+
+.plan--draw {
+  cursor: crosshair;
+}
+
+.map-underlay {
+  opacity: 0.8;
+}
+
+.draft-fill {
+  fill: rgba(31, 95, 191, 0.08);
+}
+
+.site__plot--draft.is-building {
+  stroke: var(--accent);
+}
+
+.plan-overlay .plan-overlay__area {
+  fill: var(--ink);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.footprint__ring {
+  fill: none;
+  stroke: var(--accent);
+  stroke-linejoin: round;
+}
+
+.footprint__side {
+  stroke: #9aa0ab;
+  stroke-linecap: round;
+}
+
+.footprint__side.is-on {
+  stroke: #c8641b;
+}
+
+.erker-outline {
+  fill: none;
+  stroke: #c8641b;
+}
+
+.core-draft {
+  fill: rgba(31, 95, 191, 0.12);
+  stroke: var(--accent);
+}
+
+.core-draft.is-small {
+  fill: rgba(179, 38, 30, 0.12);
+  stroke: var(--danger);
+}
+
+.entrance-mark path {
+  fill: var(--accent);
+}
+
+.entrance-mark text {
+  fill: var(--accent);
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  paint-order: stroke;
+  stroke: #fbfaf7;
+  stroke-width: 0.05px;
+}
+
+.checklist,
+.sides,
+.core-list {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+}
+
+.checklist li {
+  padding: 2px 0;
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.checklist li.is-done {
+  color: #2e7d4f;
+}
+
+.checklist li.is-optional {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.sides small {
+  color: var(--muted);
+}
+
+.core-list li {
+  padding: 8px 0 0;
+  border-top: 1px solid var(--line);
+}
+
+.core-list__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.location__buttons {
+  margin-top: 8px;
+}
+
+/* -------------------------------------------------------------- map picker */
+
+.dialog--map {
+  width: min(760px, 100%);
+}
+
+.map-search {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.map-search input {
+  flex: 1;
+  min-width: 0;
+}
+
+.map-hits {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  max-height: 110px;
+  overflow: auto;
+}
+
+.map-hits button {
+  width: 100%;
+  height: auto;
+  padding: 4px 8px;
+  text-align: left;
+  border-color: transparent;
+}
+
+.map {
+  position: relative;
+  height: min(420px, 50vh);
+  margin-bottom: 10px;
+  overflow: hidden;
+  background: #e8e6e0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+
+.map img {
+  position: absolute;
+  width: 256px;
+  height: 256px;
+  pointer-events: none;
+}
+
+.map__pin {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.map__zoom {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: grid;
+  gap: 4px;
+}
+
+.map__zoom button {
+  width: 28px;
+  padding: 0;
+  font-size: 16px;
+}
+
+.map__credit {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  padding: 1px 6px;
+  background: rgba(255, 255, 255, 0.8);
+  font-size: 10px;
+  pointer-events: none;
 }

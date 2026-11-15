@@ -61,6 +61,15 @@ function reattach(before: Wall[], after: Wall[]): Wall[] {
   return walls;
 }
 
+/**
+ * Replaces the walls of a storey: walls joined to a moved wall follow it,
+ * walls that collapsed to a point are dropped (with their openings), and the
+ * rooms are linked again.
+ */
+export function applyWalls(storey: Storey, walls: Wall[]): Storey {
+  return finish(storey, walls);
+}
+
 /** Drops walls that collapsed to a point (and their openings), then re-links. */
 function finish(storey: Storey, edited: Wall[]): Storey {
   const walls = reattach(storey.walls, edited);

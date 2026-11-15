@@ -8,7 +8,7 @@
  */
 import type { Pt } from "./geometry.ts";
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export type WallKind = "exterior" | "interior";
 
@@ -19,6 +19,12 @@ export interface Wall {
   b: Pt;
   thickness: number;
   kind: WallKind;
+  /**
+   * Set on walls generated from the building structure: the outside walls
+   * ("shell") and the walls of the hall, stairs and elevator ("core"). They
+   * are rebuilt from the structure, not edited by hand.
+   */
+  part?: "shell" | "core";
 }
 
 export type OpeningKind = "door" | "window";
@@ -33,6 +39,8 @@ export interface Opening {
   height: number;
   /** Height of the sill above the storey floor (0 for doors). */
   sill: number;
+  /** True for a door that is an entrance to the building. */
+  entrance?: boolean;
 }
 
 export const SPACE_TYPES = [
@@ -109,10 +117,54 @@ export interface Storey {
   dimensions: Dimension[];
 }
 
+export type CoreKind = "hall" | "stair" | "elevator";
+
+/** A hall, a staircase or an elevator: a rectangle that repeats on every storey. */
+export interface CoreElement {
+  id: string;
+  kind: CoreKind;
+  /** Two opposite corners, on the wall centrelines. */
+  a: Pt;
+  b: Pt;
+}
+
+/**
+ * The building before its apartments: the outline of the ground floor, how far
+ * the floors above reach beyond it, and where the hall, stairs and elevator
+ * are. The outside and core walls of every storey are generated from this
+ * (see structure.ts).
+ */
+export interface Structure {
+  /**
+   * Outline of the ground floor at the outside wall faces, interior on the
+   * left of its edges; empty until it is drawn. Edge i runs from corner i to
+   * corner i + 1.
+   */
+  footprint: Pt[];
+  /** Thickness of the generated outside walls. */
+  wallThickness: number;
+  /** Thickness of the generated hall, stair and elevator walls. */
+  coreWallThickness: number;
+  /** How far the storeys above the ground floor project, and on which edges. */
+  erker: {
+    depth: number;
+    /** One per footprint edge: true where that side has the projection. */
+    edges: boolean[];
+  };
+  core: CoreElement[];
+}
+
 export interface Building {
   id: string;
   name: string;
   storeys: Storey[];
+  structure: Structure;
+}
+
+/** A place on the earth, in degrees (WGS 84). */
+export interface GeoLocation {
+  lat: number;
+  lon: number;
 }
 
 export interface SiteLimits {
@@ -133,6 +185,8 @@ export interface Site {
   limits: SiteLimits;
   /** Where north is on the plan, in degrees clockwise from the top (0 = up). */
   north: number;
+  /** Where the origin of the plan (x 0, y 0) is on the earth; null when not set. */
+  location: GeoLocation | null;
   buildings: Building[];
 }
 
@@ -148,6 +202,10 @@ export interface Annotations {
   levelMarks: boolean;
 }
 
+/** The steps a project is worked through, in order. */
+export const STAGES = ["lot", "outline", "erker", "core", "apartments"] as const;
+export type Stage = (typeof STAGES)[number];
+
 export interface Project {
   schemaVersion: number;
   id: string;
@@ -158,5 +216,7 @@ export interface Project {
     snap: number;
   };
   annotations: Annotations;
+  /** The step of the workflow the project is in. */
+  stage: Stage;
   site: Site;
 }

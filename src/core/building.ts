@@ -80,10 +80,18 @@ export function copyStorey(
   const building = findBuilding(project, storeyId);
   if (!building) throw new Error(`No storey "${storeyId}".`);
   const source = building.storeys.find((s) => s.id === storeyId)!;
-  const wallIds = new Map(source.walls.map((w) => [w.id, newId("wall")]));
+  const copyId = newId("storey");
+  // Generated walls are named after their storey, so that rebuilding the
+  // structure finds them again; the copy's are named after the copy.
+  const wallIds = new Map(
+    source.walls.map((w) => [
+      w.id,
+      w.part && w.id.startsWith(`${source.id}:`) ? copyId + w.id.slice(source.id.length) : newId("wall"),
+    ]),
+  );
   const spaceIds = new Map(source.spaces.map((s) => [s.id, newId("space")]));
   const copy: Storey = {
-    id: newId("storey"),
+    id: copyId,
     name: nextStoreyName(building),
     elevation: topLevel(building),
     height: source.height,
@@ -172,6 +180,11 @@ export function moveBuilding(project: Project, buildingId: string, delta: Pt): P
   const shift = (p: Pt): Pt => ({ x: round(p.x + delta.x), y: round(p.y + delta.y) });
   return replaceBuilding(project, {
     ...building,
+    structure: {
+      ...building.structure,
+      footprint: building.structure.footprint.map(shift),
+      core: building.structure.core.map((c) => ({ ...c, a: shift(c.a), b: shift(c.b) })),
+    },
     storeys: building.storeys.map((s) => ({
       ...s,
       walls: s.walls.map((w) => ({ ...w, a: shift(w.a), b: shift(w.b) })),

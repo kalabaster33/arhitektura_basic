@@ -1,0 +1,9 @@
+{
+  "_doc": "The map used to place the plot on the earth. tileUrl: address of the map tiles, with {z}, {x} and {y}. attribution: the credit the map provider requires, shown wherever the map is. maxZoom: the closest zoom the provider serves. searchUrl: address search (Nominatim format, the place name is added to the end), or null to switch the search off. defaultCentre and defaultZoom: where the map opens when the project has no location yet. A drawing convenience only: the map is a background to trace over, not a survey. The plot corners must come from the cadastral survey.",
+  "tileUrl": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+  "attribution": "© OpenStreetMap contributors",
+  "maxZoom": 19,
+  "searchUrl": "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&q=",
+  "defaultCentre": { "lat": 41.9965, "lon": 21.4314 },
+  "defaultZoom": 13
+}

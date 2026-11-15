@@ -21,7 +21,18 @@ import {
   samePoint,
   snapPoint,
 } from "../core/geometry.ts";
-import type { Opening, OpeningKind, Project, Storey, Wall, WallKind } from "../core/model.ts";
+import { type MapSettings, tileZoomFor, tilesForPlan } from "../core/geo.ts";
+import type {
+  CoreKind,
+  GeoLocation,
+  Opening,
+  OpeningKind,
+  Project,
+  Storey,
+  Structure,
+  Wall,
+  WallKind,
+} from "../core/model.ts";
 import {
   type OpeningSize,
   addOpening,
@@ -31,9 +42,33 @@ import {
   openingGeometry,
 } from "../core/openings.ts";
 import { type Region, type SiteAnalysis, boundaryProblem, moveBoundaryCorner } from "../core/site.ts";
+import {
+  MIN_CORE_SIZE,
+  addEntrance,
+  coreRect,
+  moveFootprintCorner,
+  outsideSign,
+  ringArea,
+  setErkerEdge,
+} from "../core/structure.ts";
 import type { Face } from "../core/topology.ts";
 
-export type Tool = "select" | "wall" | "door" | "window" | "dimension" | "site";
+export type Tool =
+  | "select"
+  | "wall"
+  | "door"
+  | "window"
+  | "dimension"
+  | "site"
+  /** Draws the outline of the ground floor, then reshapes it. */
+  | "outline"
+  /** Switches the erker of a side of the outline on and off. */
+  | "erker"
+  | "entrance"
+  | CoreKind;
+
+const CORE_TOOLS: Tool[] = ["hall", "stair", "elevator"];
+const CORE_LABEL: Record<CoreKind, string> = { hall: "Hall", stair: "Stairs", elevator: "Elevator" };
 export type Selection =
   | { kind: "wall" | "space" | "opening" | "dimension"; id: string }
   /** A corner of the plot, or the edge that starts at that corner. */
@@ -86,8 +121,22 @@ interface Props {
   annotationEntities: Entity[];
   /** Where north is, in degrees clockwise from the top of the plan. */
   north: number;
+  /** The structure of the building: outline of the ground floor, erker and core. */
+  structure: Structure;
+  /** Outline of the shown storey at the outside wall faces; empty without a building outline. */
+  outline: Pt[];
+  /** Outline of the storeys above, shown on the ground floor where they project; null when they do not. */
+  erkerOutline: Pt[] | null;
+  /** The map shown under the plan, with the plan's origin on the earth; null for no map. */
+  map: { origin: GeoLocation; settings: MapSettings } | null;
+  /** Size of the door the entrance tool places. */
+  entranceSize: OpeningSize;
   /** A plot outline drawn with the site tool, already checked. */
   onPlotDrawn: (corners: Pt[]) => void;
+  /** A building outline drawn with the outline tool, already checked. */
+  onFootprintDrawn: (corners: Pt[]) => void;
+  /** A hall, staircase or elevator drawn as a rectangle between two corners. */
+  onCoreDrawn: (kind: CoreKind, a: Pt, b: Pt) => void;
   onProjectChange: (project: Project, record: boolean) => void;
   onChange: (storey: Storey, record: boolean) => void;
   onSelect: (selection: Selection) => void;
@@ -105,6 +154,8 @@ type Drag =
   | { kind: "wall"; base: Storey; id: string; start: Pt; last: Pt; moved: boolean }
   | { kind: "opening"; base: Storey; id: string; last: number; moved: boolean }
   | { kind: "corner"; base: Project; index: number; last: Pt; moved: boolean }
+  | { kind: "footprintCorner"; base: Project; index: number; last: Pt; moved: boolean }
+  | { kind: "rect"; core: CoreKind; start: Pt }
   | { kind: "building"; base: Project; start: Pt; last: Pt; moved: boolean };
 
 const SNAP_PX = 10;
@@ -214,11 +265,20 @@ export function PlanCanvas(props: Props) {
   const [plotError, setPlotError] = useState<string | null>(null);
   /** A dimension being placed: its first point, then its second; the third click sets the line. */
   const [dimDraft, setDimDraft] = useState<{ a: Pt; b: Pt | null } | null>(null);
+  /** A hall, staircase or elevator being dragged out. */
+  const [rectDraft, setRectDraft] = useState<{ a: Pt; b: Pt } | null>(null);
   const drag = useRef<Drag | null>(null);
   const fitted = useRef(false);
   const plot = props.project.site.boundary;
   const setbacks = props.project.site.setbacks;
   const hasPlot = plot.length >= 3;
+  const footprint = props.structure.footprint;
+  const hasFootprint = footprint.length >= 3;
+  /** Generated walls are changed through the structure, not dragged about. */
+  const locked = (w: Wall) => hasFootprint && w.part !== undefined;
+  const coreTool = CORE_TOOLS.includes(tool) ? (tool as CoreKind) : null;
+  /** True while the pointer draws an outline: of the plot or of the building. */
+  const drawingPlot = (tool === "site" && !hasPlot) || (tool === "outline" && !hasFootprint);
 
   useEffect(() => {
     const svg = svgRef.current!;
@@ -234,6 +294,7 @@ export function PlanCanvas(props: Props) {
     const pts = [
       ...storey.walls.flatMap((w) => [w.a, w.b]),
       ...plot,
+      ...footprint,
       ...props.dimensionChains.flatMap((c) => c.spans.flatMap((s) => [s.from, s.to])),
     ];
     if (pts.length === 0) {
@@ -252,7 +313,7 @@ export function PlanCanvas(props: Props) {
       ox: minX - (size.w / zoom - w) / 2,
       oy: minY - (size.h / zoom - h) / 2,
     });
-  }, [size, storey.walls, plot, props.dimensionChains]);
+  }, [size, storey.walls, plot, footprint, props.dimensionChains]);
 
   useEffect(() => {
     if (!fitted.current && size.w > 0) {
@@ -279,7 +340,8 @@ export function PlanCanvas(props: Props) {
     }
     setPlotDraft([]);
     setPlotError(null);
-    props.onPlotDrawn(corners);
+    if (tool === "outline") props.onFootprintDrawn(corners);
+    else props.onPlotDrawn(corners);
   };
   const liveDraft = useRef({ plotDraft, finishPlot });
   liveDraft.current = { plotDraft, finishPlot };
@@ -375,20 +437,31 @@ export function PlanCanvas(props: Props) {
   };
 
   /** The spot on the nearest wall where the door or window tool can place its opening. */
-  const placeAt = (e: { clientX: number; clientY: number }, kind: OpeningKind) => {
-    const hit = locateOnWall(storey, toModel(e), WALL_REACH_PX / view.zoom);
+  const placeAt = (e: { clientX: number; clientY: number }, kind: OpeningKind | "entrance") => {
+    // An entrance goes in an outside wall of the building.
+    const walls = kind === "entrance" ? storey.walls.filter((w) => w.part === "shell") : storey.walls;
+    const hit = locateOnWall({ ...storey, walls }, toModel(e), WALL_REACH_PX / view.zoom);
     if (!hit) return null;
     const offset = fitOffset(
       storey,
       hit.wallId,
       roundTo(hit.offset, snapStep),
-      props.openingSize[kind].width,
+      (kind === "entrance" ? props.entranceSize : props.openingSize[kind]).width,
     );
     return offset === null ? null : { wallId: hit.wallId, offset };
   };
 
+  /** While an outline is drawn, Shift keeps the new edge horizontal or vertical. */
+  const outlinePoint = (e: React.PointerEvent): Pt => {
+    const p = snapPoint(toModel(e), snapStep);
+    const last = plotDraft[plotDraft.length - 1];
+    if (!last || !e.shiftKey) return p;
+    return Math.abs(p.x - last.x) >= Math.abs(p.y - last.y) ? { x: p.x, y: last.y } : { x: last.x, y: p.y };
+  };
+
   const onBackgroundDown = (e: React.PointerEvent) => {
-    if (e.button === 1 || (e.button === 0 && (tool === "select" || (tool === "site" && hasPlot)))) {
+    const pans = tool === "select" || tool === "erker" || ((tool === "site" || tool === "outline") && !drawingPlot);
+    if (e.button === 1 || (e.button === 0 && pans)) {
       svgRef.current!.setPointerCapture(e.pointerId);
       drag.current = { kind: "pan", x: e.clientX, y: e.clientY, view, moved: false };
       return;
@@ -404,8 +477,25 @@ export function PlanCanvas(props: Props) {
       setPlacing(null);
       return;
     }
-    if (tool === "site") {
-      const p = snapPoint(toModel(e), snapStep);
+    if (tool === "entrance") {
+      const at = placeAt(e, "entrance");
+      if (!at) return;
+      const next = addEntrance(storey, at.wallId, at.offset, props.entranceSize);
+      if (next === storey) return;
+      onChange(next, true);
+      onSelect({ kind: "opening", id: next.openings[next.openings.length - 1].id });
+      setPlacing(null);
+      return;
+    }
+    if (coreTool) {
+      const start = snap(toModel(e));
+      svgRef.current!.setPointerCapture(e.pointerId);
+      drag.current = { kind: "rect", core: coreTool, start };
+      setRectDraft({ a: start, b: start });
+      return;
+    }
+    if (tool === "site" || tool === "outline") {
+      const p = outlinePoint(e);
       setPlotError(null);
       if (plotDraft.length >= 3 && dist(toModel(e), plotDraft[0]) <= SNAP_PX / view.zoom) {
         finishPlot(plotDraft);
@@ -449,9 +539,31 @@ export function PlanCanvas(props: Props) {
           ? drawPoint(e)
           : tool === "dimension" && !dimDraft?.b
             ? dimSnap(toModel(e))
-            : snapPoint(toModel(e), snapStep),
+            : coreTool
+              ? snap(toModel(e))
+              : drawingPlot
+                ? outlinePoint(e)
+                : snapPoint(toModel(e), snapStep),
       );
-      if (tool === "door" || tool === "window") setPlacing(placeAt(e, tool));
+      if (tool === "door" || tool === "window" || tool === "entrance") setPlacing(placeAt(e, tool));
+      return;
+    }
+    if (d.kind === "rect") {
+      const b = snap(toModel(e));
+      setCursor(b);
+      setRectDraft({ a: d.start, b });
+      return;
+    }
+    if (d.kind === "footprintCorner") {
+      const to = snapPoint(toModel(e), snapStep);
+      setCursor(to);
+      if (samePoint(to, d.last, 1e-9)) return;
+      const next = moveFootprintCorner(d.base, props.buildingId, d.index, to);
+      // Unchanged although the corner was asked to move: the outline would cross itself.
+      if (next === d.base && !samePoint(to, d.base.site.buildings.find((b) => b.id === props.buildingId)!.structure.footprint[d.index], 1e-9)) return;
+      d.last = to;
+      props.onProjectChange(next, !d.moved);
+      d.moved = true;
       return;
     }
     if (d.kind === "pan") {
@@ -519,6 +631,11 @@ export function PlanCanvas(props: Props) {
       svgRef.current!.releasePointerCapture(e.pointerId);
     }
     if (d?.kind === "pan" && !d.moved && e.button === 0) onSelect(null);
+    if (d?.kind === "rect") {
+      const b = snap(toModel(e));
+      setRectDraft(null);
+      props.onCoreDrawn(d.core, d.start, b);
+    }
   };
 
   const startWallDrag = (e: React.PointerEvent, id: string) => {
@@ -552,6 +669,13 @@ export function PlanCanvas(props: Props) {
     drag.current = { kind: "corner", base: props.project, index, last: plot[index], moved: false };
   };
 
+  const startFootprintCornerDrag = (e: React.PointerEvent, index: number) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    svgRef.current!.setPointerCapture(e.pointerId);
+    drag.current = { kind: "footprintCorner", base: props.project, index, last: footprint[index], moved: false };
+  };
+
   const startBuildingDrag = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     e.stopPropagation();
@@ -583,8 +707,35 @@ export function PlanCanvas(props: Props) {
   const interactive = tool === "select";
   const preview = tool === "wall" && chainStart && cursor ? { a: chainStart, b: cursor } : null;
   const wallById = useMemo(() => new Map(storey.walls.map((w) => [w.id, w])), [storey.walls]);
-  const placingKind = tool === "door" || tool === "window" ? tool : null;
+  const placingKind = tool === "door" || tool === "window" || tool === "entrance" ? tool : null;
   const placingWall = placing && placingKind ? wallById.get(placing.wallId) : undefined;
+  const placingWidth =
+    placingKind === "entrance" ? props.entranceSize.width : placingKind ? props.openingSize[placingKind].width : 0;
+  // The map under the plan: the tiles that cover the view, turned so that north is where the plan has it.
+  const mapTiles = useMemo(() => {
+    if (!props.map || size.w === 0) return [];
+    const a = (-props.north * Math.PI) / 180;
+    const corners = [
+      { x: view.ox, y: view.oy },
+      { x: view.ox + size.w / view.zoom, y: view.oy },
+      { x: view.ox + size.w / view.zoom, y: view.oy + size.h / view.zoom },
+      { x: view.ox, y: view.oy + size.h / view.zoom },
+    ].map((p) => ({ x: p.x * Math.cos(a) - p.y * Math.sin(a), y: p.x * Math.sin(a) + p.y * Math.cos(a) }));
+    const { origin, settings } = props.map;
+    return tilesForPlan(
+      origin,
+      tileZoomFor(origin.lat, view.zoom, settings.maxZoom),
+      {
+        minX: Math.min(...corners.map((p) => p.x)),
+        minY: Math.min(...corners.map((p) => p.y)),
+        maxX: Math.max(...corners.map((p) => p.x)),
+        maxY: Math.max(...corners.map((p) => p.y)),
+      },
+      settings.tileUrl,
+    );
+  }, [props.map, props.north, view, size]);
+  const draftRing = drawingPlot && plotDraft.length > 0 ? [...plotDraft, ...(cursor ? [cursor] : [])] : [];
+  const draftRect = rectDraft && coreRect(rectDraft);
   const siteTool = tool === "site";
   const dimScale = props.dimensionStyle.screenScale;
   const [autoDims, ownDims] = useMemo(() => {
@@ -599,14 +750,13 @@ export function PlanCanvas(props: Props) {
     dimDraft?.b && cursor
       ? ownChain({ id: "draft", a: dimDraft.a, b: dimDraft.b, offset: draftOffset(dimDraft.a, dimDraft.b, cursor) })
       : null;
-  const drawingPlot = siteTool && !hasPlot;
   /** Which side of its edges the inside of the plot is on: 1 for left, -1 for right. */
   const plotSide = useMemo(() => (ringSignedArea(plot) >= 0 ? 1 : -1), [plot]);
 
   return (
     <svg
       ref={svgRef}
-      className={`plan plan--${tool}`}
+      className={`plan plan--${tool}${drawingPlot || coreTool || tool === "entrance" ? " plan--draw" : ""}`}
       onPointerDown={onBackgroundDown}
       onPointerMove={onMove}
       onPointerUp={onUp}
@@ -643,6 +793,21 @@ export function PlanCanvas(props: Props) {
             pointerEvents="none"
           />
         ))}
+        {mapTiles.length > 0 && (
+          <g transform={`rotate(${props.north})`} className="map-underlay" pointerEvents="none">
+            {mapTiles.map((t) => (
+              <image
+                key={t.key}
+                href={t.url}
+                x={t.x}
+                y={t.y}
+                width={t.size + px}
+                height={t.size + px}
+                preserveAspectRatio="none"
+              />
+            ))}
+          </g>
+        )}
         <path d={`M${-12 * px} 0H${12 * px}M0 ${-12 * px}V${12 * px}`} className="origin" strokeWidth={px} />
         {hasPlot && <path d={ringPath(plot)} className="plot-fill" pointerEvents="none" />}
 
@@ -715,7 +880,7 @@ export function PlanCanvas(props: Props) {
         ))}
         {/* Wider invisible lines so thin walls are easy to grab. */}
         {interactive &&
-          storey.walls.map((w) => (
+          storey.walls.filter((w) => !locked(w)).map((w) => (
             <line
               key={w.id}
               x1={w.a.x}
@@ -747,9 +912,9 @@ export function PlanCanvas(props: Props) {
           <OpeningSymbol
             wall={placingWall}
             opening={{
-              kind: placingKind,
+              kind: placingKind === "entrance" ? "door" : placingKind,
               offset: placing.offset,
-              width: props.openingSize[placingKind].width,
+              width: placingWidth,
             }}
             px={px}
             className="is-preview"
@@ -795,6 +960,119 @@ export function PlanCanvas(props: Props) {
             <title>{g.label}</title>
           </path>
         ))}
+
+        {storey.openings.map((o) => {
+          const wall = wallById.get(o.wallId);
+          if (!o.entrance || !wall) return null;
+          const g = openingGeometry(wall, o);
+          const out = props.outline.length >= 3 ? outsideSign(props.outline, g.centre, g.normal) : 1;
+          // Clear of the wall, and of the door leaf where it swings to the outside.
+          const reach = g.thickness / 2 + (out === 1 ? o.width : 0) + 8 * px;
+          const tip = { x: g.centre.x + g.normal.x * out * reach, y: g.centre.y + g.normal.y * out * reach };
+          const back = { x: tip.x + g.normal.x * out * 12 * px, y: tip.y + g.normal.y * out * 12 * px };
+          const label = { x: tip.x + g.normal.x * out * 26 * px, y: tip.y + g.normal.y * out * 26 * px };
+          return (
+            <g key={o.id} className="entrance-mark" pointerEvents="none">
+              <path
+                d={`M${tip.x},${tip.y}L${back.x + g.dir.x * 7 * px},${back.y + g.dir.y * 7 * px}L${back.x - g.dir.x * 7 * px},${back.y - g.dir.y * 7 * px}Z`}
+              />
+              <text x={label.x} y={label.y} fontSize={11 * px}>
+                Entrance
+              </text>
+            </g>
+          );
+        })}
+
+        {props.erkerOutline && (
+          <path
+            d={ringPath(props.erkerOutline)}
+            className="erker-outline"
+            strokeWidth={1.5 * px}
+            strokeDasharray={`${7 * px} ${4 * px}`}
+            pointerEvents="none"
+          >
+            <title>Outline of the storeys above (erker)</title>
+          </path>
+        )}
+
+        {hasFootprint && tool === "outline" && (
+          <g className="footprint">
+            <path d={ringPath(footprint)} className="footprint__ring" strokeWidth={2 * px} pointerEvents="none" />
+            {footprint.map((p, i) => (
+              <circle
+                key={i}
+                cx={p.x}
+                cy={p.y}
+                r={6 * px}
+                strokeWidth={1.5 * px}
+                className="handle"
+                onPointerDown={(e) => startFootprintCornerDrag(e, i)}
+              />
+            ))}
+          </g>
+        )}
+
+        {hasFootprint && tool === "erker" && (
+          <g className="footprint">
+            {footprint.map((a, i) => {
+              const b = footprint[(i + 1) % footprint.length];
+              const on = props.structure.erker.edges[i] === true;
+              return (
+                <g key={i}>
+                  <line
+                    x1={a.x}
+                    y1={a.y}
+                    x2={b.x}
+                    y2={b.y}
+                    strokeWidth={(on ? 4 : 2) * px}
+                    className={`footprint__side${on ? " is-on" : ""}`}
+                    pointerEvents="none"
+                  />
+                  <line
+                    x1={a.x}
+                    y1={a.y}
+                    x2={b.x}
+                    y2={b.y}
+                    strokeWidth={16 * px}
+                    className="site__edge-hit"
+                    onPointerDown={(e) => {
+                      if (e.button !== 0) return;
+                      e.stopPropagation();
+                      props.onProjectChange(setErkerEdge(props.project, props.buildingId, i), true);
+                    }}
+                  >
+                    <title>{on ? "This side has the erker: click to switch it off" : "Click to give this side the erker"}</title>
+                  </line>
+                </g>
+              );
+            })}
+          </g>
+        )}
+
+        {draftRect && coreTool && (
+          <g pointerEvents="none">
+            <rect
+              x={draftRect.min.x}
+              y={draftRect.min.y}
+              width={draftRect.max.x - draftRect.min.x}
+              height={draftRect.max.y - draftRect.min.y}
+              strokeWidth={2 * px}
+              className={`core-draft${
+                draftRect.max.x - draftRect.min.x < MIN_CORE_SIZE || draftRect.max.y - draftRect.min.y < MIN_CORE_SIZE
+                  ? " is-small"
+                  : ""
+              }`}
+            />
+            <text
+              x={(draftRect.min.x + draftRect.max.x) / 2}
+              y={draftRect.min.y - 8 * px}
+              fontSize={12 * px}
+              className="dimension"
+            >
+              {CORE_LABEL[coreTool]} {(draftRect.max.x - draftRect.min.x).toFixed(2)} × {(draftRect.max.y - draftRect.min.y).toFixed(2)} m
+            </text>
+          </g>
+        )}
 
         {/* The plot: outline, buildable area, footprint and where the building breaks a limit. */}
         {hasPlot && (
@@ -886,13 +1164,24 @@ export function PlanCanvas(props: Props) {
               ))}
           </g>
         )}
-        {drawingPlot && plotDraft.length > 0 && (
+        {draftRing.length > 0 && (
           <g pointerEvents="none">
+            {draftRing.length >= 3 && <path d={ringPath(draftRing)} className="draft-fill" />}
             <path
-              d={`M${[...plotDraft, ...(cursor ? [cursor] : [])].map((p) => `${p.x},${p.y}`).join("L")}`}
-              className="site__plot site__plot--draft"
+              d={`M${draftRing.map((p) => `${p.x},${p.y}`).join("L")}`}
+              className={`site__plot site__plot--draft${tool === "outline" ? " is-building" : ""}`}
               strokeWidth={2 * px}
             />
+            {cursor && (
+              <text
+                x={(plotDraft[plotDraft.length - 1].x + cursor.x) / 2}
+                y={(plotDraft[plotDraft.length - 1].y + cursor.y) / 2 - 10 * px}
+                fontSize={12 * px}
+                className="dimension"
+              >
+                {dist(plotDraft[plotDraft.length - 1], cursor).toFixed(2)} m
+              </text>
+            )}
             {plotDraft.map((p, i) => (
               <circle
                 key={i}
@@ -908,7 +1197,11 @@ export function PlanCanvas(props: Props) {
 
         {selectedWall &&
           interactive &&
-          [selectedWall.a, selectedWall.b].map((p, i) => (
+          !locked(selectedWall) &&
+          [selectedWall.a, selectedWall.b]
+            // A corner shared with a generated wall stays where the structure put it.
+            .filter((p) => !storey.walls.some((w) => locked(w) && (samePoint(w.a, p) || samePoint(w.b, p))))
+            .map((p, i) => (
             <circle
               key={i}
               cx={p.x}
@@ -999,7 +1292,7 @@ export function PlanCanvas(props: Props) {
             </text>
           </>
         )}
-        {(tool === "wall" || drawingPlot || (tool === "dimension" && !dimDraft?.b)) && cursor && (
+        {(tool === "wall" || drawingPlot || coreTool || (tool === "dimension" && !dimDraft?.b)) && cursor && (
           <circle cx={cursor.x} cy={cursor.y} r={4 * px} strokeWidth={1.5 * px} className="snap-dot" pointerEvents="none" />
         )}
       </g>
@@ -1019,6 +1312,16 @@ export function PlanCanvas(props: Props) {
         {plotError && (
           <text x={12} y={size.h - 30} className="plan-overlay__error">
             {plotError} Keep clicking corners, or press Esc to start again.
+          </text>
+        )}
+        {!plotError && draftRing.length >= 3 && (
+          <text x={12} y={size.h - 30} className="plan-overlay__area">
+            {tool === "outline" ? "Base area" : "Plot area"} {ringArea(draftRing).toFixed(2)} m²
+          </text>
+        )}
+        {mapTiles.length > 0 && (
+          <text x={size.w / 2} y={size.h - 12} textAnchor="middle">
+            {props.map!.settings.attribution}
           </text>
         )}
         <text x={size.w - 12} y={size.h - 12} textAnchor="end">

@@ -6,6 +6,7 @@ import coreAlignment from "../config/coreAlignment.json";
 import editorDefaults from "../config/editorDefaults.json";
 import exportDefaults from "../config/exportDefaults.json";
 import layoutRules from "../config/layoutRules.json";
+import mapSettingsJson from "../config/mapSettings.json";
 import roomChecks from "../config/roomChecks.json";
 import siteRulesJson from "../config/siteRules.json";
 import { parseAnnotationStyle, storeyAnnotations } from "../core/annotations.ts";
@@ -37,7 +38,8 @@ import {
 import { checkCoreAlignment, coreOutlines, parseCoreConfig } from "../core/coreAlignment.ts";
 import { checkBuildingPlan, parseRoomCheckConfig } from "../core/checks.ts";
 import { deleteWall } from "../core/edit.ts";
-import type { Project, Storey, WallKind } from "../core/model.ts";
+import { parseMapSettings } from "../core/geo.ts";
+import type { Project, Stage, Storey, WallKind } from "../core/model.ts";
 import { deleteOpening } from "../core/openings.ts";
 import {
   createProject,
@@ -50,8 +52,20 @@ import { analyseSite, deleteBoundaryCorner, parseSiteRules, setBoundary } from "
 import { deleteDimension, parseDimensionStyle, storeyChains } from "../core/dimensions.ts";
 import { parseExportConfig } from "../core/sheets.ts";
 import { linkSpaces } from "../core/spaces.ts";
+import {
+  addCoreElement,
+  isGroundStorey,
+  rebuildStructure,
+  setFootprint,
+  setStage,
+  storeyOutline,
+  structureIntact,
+  structureStatus,
+  upperOutline,
+} from "../core/structure.ts";
 import { download, fileBase } from "../export/download.ts";
 import { ExportDialog } from "./ExportDialog.tsx";
+import { MapPicker } from "./MapPicker.tsx";
 import {
   type ApartmentTag,
   type CoreGhost,
@@ -71,6 +85,7 @@ import {
   WarningsPanel,
 } from "./Sidebar.tsx";
 import { useProjectStore } from "./useProjectStore.ts";
+import { CorePanel, ErkerPanel, LocationPanel, OutlinePanel, Stepper } from "./WorkflowPanels.tsx";
 
 const areaConfig = parseAreaConfig(areaDefinitions);
 const coreConfig = parseCoreConfig(coreAlignment);
@@ -80,6 +95,7 @@ const siteRules = parseSiteRules(siteRulesJson);
 const exportConfig = parseExportConfig(exportDefaults);
 const dimensionStyle = parseDimensionStyle(dimensionStyleJson);
 const annotationStyle = parseAnnotationStyle(annotationStyleJson);
+const mapSettings = parseMapSettings(mapSettingsJson);
 /** Printed on the Notes sheet of an exported schedule. */
 const exportNotes = [areaDefinitions._status, siteRulesJson._status];
 
@@ -103,14 +119,34 @@ const APARTMENT_COLORS = [
   "#4f5fc4",
 ];
 
-const TOOLS: { tool: Tool; label: string; title: string }[] = [
-  { tool: "select", label: "Select", title: "Select and move (V)" },
-  { tool: "wall", label: "Wall", title: "Draw walls (W)" },
-  { tool: "door", label: "Door", title: "Place doors on walls (D)" },
-  { tool: "window", label: "Window", title: "Place windows on walls (N)" },
-  { tool: "dimension", label: "Dimension", title: "Place a dimension between two points (M)" },
-  { tool: "site", label: "Site", title: "Draw the plot, set setbacks and move the building (S)" },
-];
+interface ToolButton {
+  tool: Tool;
+  label: string;
+  title: string;
+  /** Keyboard shortcut, a single letter. */
+  key?: string;
+}
+
+/** The tools of each step; the first is the one the step opens with. */
+const STAGE_TOOLS: Record<Stage, ToolButton[]> = {
+  lot: [{ tool: "site", label: "Plot", title: "Draw the plot, set setbacks and move the building (S)", key: "s" }],
+  outline: [{ tool: "outline", label: "Outline", title: "Draw the outline of the ground floor, then drag its corners" }],
+  erker: [{ tool: "erker", label: "Erker sides", title: "Click a side of the outline to switch its erker on or off" }],
+  core: [
+    { tool: "entrance", label: "Entrance", title: "Place the entrance in an outside wall of the ground floor" },
+    { tool: "hall", label: "Hall", title: "Drag a rectangle for the hall" },
+    { tool: "stair", label: "Stairs", title: "Drag a rectangle for the stairs" },
+    { tool: "elevator", label: "Elevator", title: "Drag a rectangle for the elevator" },
+    { tool: "select", label: "Select", title: "Select and move the entrance (V)", key: "v" },
+  ],
+  apartments: [
+    { tool: "select", label: "Select", title: "Select and move (V)", key: "v" },
+    { tool: "wall", label: "Wall", title: "Draw walls (W)", key: "w" },
+    { tool: "door", label: "Door", title: "Place doors on walls (D)", key: "d" },
+    { tool: "window", label: "Window", title: "Place windows on walls (N)", key: "n" },
+    { tool: "dimension", label: "Dimension", title: "Place a dimension between two points (M)", key: "m" },
+  ],
+};
 
 const STATUS: Record<Tool, string> = {
   select:
@@ -121,6 +157,12 @@ const STATUS: Record<Tool, string> = {
   dimension:
     "Click the two points to measure, then click where the dimension line goes · it snaps to wall corners and opening edges · Esc starts again",
   site: "Click an edge for its setback · drag a corner to reshape the plot · drag the building to move it · drag empty space to pan",
+  outline: "Drag a corner to reshape the outline · drag empty space to pan · wheel to zoom",
+  erker: "Click a side of the outline to switch its erker on or off · drag empty space to pan",
+  entrance: "Move over an outside wall and click to place the entrance · it snaps to where it fits",
+  hall: "Drag a rectangle for the hall · it snaps to wall corners and the grid · it is drawn on every storey",
+  stair: "Drag a rectangle for the stairs · it snaps to wall corners and the grid · it is drawn on every storey",
+  elevator: "Drag a rectangle for the elevator · it snaps to wall corners and the grid · it is drawn on every storey",
 };
 
 export function App() {
@@ -135,9 +177,20 @@ export function App() {
   // as it would become; nothing is changed until it is applied.
   const storey = previewing ? preview.proposals[preview.index].storey : realStorey;
   const building = findBuilding(project, storey.id)!;
-  const [tool, setTool] = useState<Tool>("select");
+  const stage = project.stage;
+  const tools = STAGE_TOOLS[stage];
+  const [chosenTool, setTool] = useState<Tool>(tools[0].tool);
+  // A tool belongs to a step; after a step change (also by undo) the step's first tool takes over.
+  const stageTool = tools.some((t) => t.tool === chosenTool) ? chosenTool : tools[0].tool;
+  // The entrance is placed on the ground floor only; on another storey the tool steps aside.
+  const tool = stageTool === "entrance" && !isGroundStorey(building, storey.id) ? "select" : stageTool;
   const [selection, setSelection] = useState<Selection>(null);
-  const [wallKind, setWallKind] = useState<WallKind>("exterior");
+  const [wallKind, setWallKind] = useState<WallKind>("interior");
+  const [pickingLocation, setPickingLocation] = useState(false);
+  const [showMap, setShowMap] = useState(true);
+  const structure = building.structure;
+  const hasOutline = structure.footprint.length >= 3;
+  const status = useMemo(() => structureStatus(project), [project]);
   const [thickness, setThickness] = useState(editorDefaults.wallThickness);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -175,6 +228,16 @@ export function App() {
   const setProject = (next: Project, record = true) => {
     if (previewing || next === project) return;
     store.set(next, record);
+  };
+  const openStage = (next: Stage) => {
+    const moved = setStage(project, next);
+    if (moved === project) return;
+    setPreview(null);
+    setSelection(null);
+    setTool(STAGE_TOOLS[next][0].tool);
+    // The entrance and the core are placed on the ground floor.
+    if (next === "core") setActiveStoreyId(sortedStoreys(building)[0].id);
+    store.set(moved);
   };
 
   const storeys = useMemo(() => sortedStoreys(building), [building]);
@@ -237,17 +300,26 @@ export function App() {
   const openStorey = (id: string) => {
     setActiveStoreyId(id);
     setSelection(null);
+    // The entrance is placed on the ground floor only.
+    if (tool === "entrance" && id !== storeys[0].id) setTool("select");
   };
   const removeStorey = () => {
     if (!window.confirm(`Delete "${storey.name}" and everything drawn on it? Undo brings it back.`)) return;
     const next = below ?? above;
-    store.set(deleteStorey(project, storey.id));
+    store.set(rebuildStructure(deleteStorey(project, storey.id), building.id));
     openStorey(next.id);
   };
 
   const setStorey = (next: Storey, record = true) => {
     if (previewing) return; // a preview is looked at, not edited
+    // The walls of the structure are changed in their own steps, not on a storey.
+    if (hasOutline && !structureIntact(realStorey, next)) return;
     store.set(replaceStorey(project, next), record);
+  };
+  const chooseTool = (next: Tool) => {
+    setTool(next);
+    // The entrance is on the ground floor.
+    if (next === "entrance") openStorey(storeys[0].id);
   };
 
   // Any change to the project, or another storey, ends a preview: it was made for the plan as it was.
@@ -300,14 +372,16 @@ export function App() {
   };
 
   // Latest values for the keyboard handler, which is attached once.
-  const live = useRef({ store, storey, selection, setStorey, project, setProject, exporting });
-  live.current = { store, storey, selection, setStorey, project, setProject, exporting };
+  const live = useRef({ store, storey, selection, setStorey, project, setProject, exporting, tools, chooseTool, pickingLocation });
+  live.current = { store, storey, selection, setStorey, project, setProject, exporting, tools, chooseTool, pickingLocation };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName)) return;
-      const { store, storey, selection, setStorey, project, setProject, exporting } = live.current;
-      if (exporting) return; // the export dialog has the keyboard
+      const { store, storey, selection, setStorey, project, setProject, exporting, tools, chooseTool, pickingLocation } =
+        live.current;
+      if (exporting || pickingLocation) return; // the dialog has the keyboard
+      const shortcut = tools.find((t) => t.key === e.key.toLowerCase());
       const mod = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
       if (mod && key === "z") {
@@ -316,12 +390,7 @@ export function App() {
       } else if (mod && key === "y") {
         e.preventDefault();
         store.redo();
-      } else if (!mod && key === "v") setTool("select");
-      else if (!mod && key === "w") setTool("wall");
-      else if (!mod && key === "d") setTool("door");
-      else if (!mod && key === "n") setTool("window");
-      else if (!mod && key === "m") setTool("dimension");
-      else if (!mod && key === "s") setTool("site");
+      } else if (!mod && shortcut) chooseTool(shortcut.tool);
       else if ((e.key === "Delete" || e.key === "Backspace") && selection?.kind === "dimension") {
         e.preventDefault();
         setStorey(deleteDimension(storey, selection.id));
@@ -372,7 +441,12 @@ export function App() {
     if (storey.walls.length > 0 && !window.confirm("Start an empty project? The current plan is replaced (save it first to keep it).")) {
       return;
     }
-    store.load(createProject("Untitled project", editorDefaults.snapStep));
+    store.load(
+      createProject("Untitled project", editorDefaults.snapStep, {
+        shell: editorDefaults.wallThickness.exterior,
+        core: editorDefaults.wallThickness.core,
+      }),
+    );
     setActiveStoreyId(undefined);
     setSelection(null);
   };
@@ -388,32 +462,36 @@ export function App() {
           onChange={(e) => store.set({ ...project, name: e.target.value }, false)}
         />
         <div className="group" role="group" aria-label="Tool">
-          {TOOLS.map((t) => (
+          {tools.map((t) => (
             <button
               key={t.tool}
               className={tool === t.tool ? "is-active" : ""}
-              onClick={() => setTool(t.tool)}
+              onClick={() => chooseTool(t.tool)}
               title={t.title}
             >
               {t.label}
             </button>
           ))}
         </div>
-        <label className="inline">
-          New walls
-          <select value={wallKind} onChange={(e) => setWallKind(e.target.value as WallKind)}>
-            <option value="exterior">exterior</option>
-            <option value="interior">interior</option>
-          </select>
-        </label>
-        <div className="inline-field">
-          <LengthField
-            label="Thickness"
-            value={thickness[wallKind]}
-            min={0.01}
-            onCommit={(v) => setThickness({ ...thickness, [wallKind]: v })}
-          />
-        </div>
+        {stage === "apartments" && (
+          <>
+            <label className="inline">
+              New walls
+              <select value={wallKind} onChange={(e) => setWallKind(e.target.value as WallKind)}>
+                <option value="interior">interior</option>
+                <option value="exterior">exterior</option>
+              </select>
+            </label>
+            <div className="inline-field">
+              <LengthField
+                label="Thickness"
+                value={thickness[wallKind]}
+                min={0.01}
+                onCommit={(v) => setThickness({ ...thickness, [wallKind]: v })}
+              />
+            </div>
+          </>
+        )}
         <div className="inline-field">
           <LengthField
             label="Snap"
@@ -454,6 +532,21 @@ export function App() {
           }}
         />
       </header>
+
+      <Stepper project={project} onStage={openStage} />
+
+      {pickingLocation && (
+        <MapPicker
+          settings={mapSettings}
+          current={project.site.location}
+          onClose={() => setPickingLocation(false)}
+          onPick={(location) => {
+            setProject({ ...project, site: { ...project.site, location } });
+            setShowMap(true);
+            setPickingLocation(false);
+          }}
+        />
+      )}
 
       {exporting && (
         <ExportDialog
@@ -523,6 +616,17 @@ export function App() {
             dimensionStyle={dimensionStyle}
             annotationEntities={annotationEntities}
             north={project.site.north}
+            structure={structure}
+            outline={storeyOutline(building, storey.id)}
+            erkerOutline={
+              hasOutline && isGroundStorey(building, storey.id) && upperOutline(structure) !== structure.footprint
+                ? upperOutline(structure)
+                : null
+            }
+            map={showMap && project.site.location ? { origin: project.site.location, settings: mapSettings } : null}
+            entranceSize={editorDefaults.entranceDoor}
+            onFootprintDrawn={(corners) => setProject(setFootprint(project, building.id, corners))}
+            onCoreDrawn={(kind, a, b) => setProject(addCoreElement(project, building.id, kind, a, b).project)}
             onPlotDrawn={(corners) => {
               setProject(
                 setBoundary(project, corners, siteRules.defaultSetback, {
@@ -542,99 +646,137 @@ export function App() {
               ? "Previewing a generated layout · nothing is changed until you press Apply · Esc cancels"
               : tool === "site" && !hasPlot
                 ? "Click the corners of the plot · click the first corner again or press Enter to close it · Esc starts again"
-                : STATUS[tool]}
+                : tool === "outline" && !hasOutline
+                  ? "Click the corners of the ground floor · Shift keeps an edge straight · click the first corner again or press Enter to close it · Esc starts again"
+                  : STATUS[tool]}
           </p>
         </div>
         <aside className="sidebar">
-          <StoreysPanel
-            storeys={storeys}
-            activeId={storey.id}
-            warningCount={warningCount}
-            canRestack={elevationIssues.length > 0}
-            onSelect={openStorey}
-            onAdd={() => {
-              const r = addStorey(project, building.id);
-              store.set(r.project);
-              openStorey(r.storeyId);
-            }}
-            onCopy={() => {
-              const r = copyStorey(project, storey.id);
-              store.set(r.project);
-              openStorey(r.storeyId);
-            }}
-            onDelete={removeStorey}
-            onRestack={() => store.set(restackStoreys(project, building.id))}
-            onUpdate={(patch) =>
-              store.set(updateStoreyInfo(project, storey.id, patch), patch.name === undefined)
-            }
-          />
-          <WarningsPanel
-            coreIssues={coreIssues}
-            elevationIssues={elevationIssues}
-            storeyCount={storeys.length}
-            hasCore={hasCore}
-            tolerance={coreConfig.tolerance}
-            onOpenCore={(issue) => {
-              setActiveStoreyId(issue.storeyId);
-              setSelection({ kind: "space", id: issue.spaceId });
-            }}
-            onOpenStorey={openStorey}
-          />
-          <SitePanel
-            project={project}
-            buildingId={building.id}
-            analysis={siteAnalysis}
-            rules={siteRules}
-            config={areaConfig}
-            siteToolActive={tool === "site"}
-            selection={selection}
-            onChange={(p) => setProject(p)}
-            onSelect={setSelection}
-            onUseSiteTool={() => setTool("site")}
-          />
-          <PlanChecksPanel
-            storey={storey}
-            issues={storeyPlanIssues}
-            onOpen={(issue) => issue.spaceId && setSelection({ kind: "space", id: issue.spaceId })}
-          />
-          <PropertiesPanel
-            storey={storey}
-            selection={selection}
-            dimensionStyle={dimensionStyle}
-            onChange={(s) => setStorey(s)}
-            onSelect={setSelection}
-          />
-          <DimensionsPanel
-            annotations={project.annotations}
-            style={dimensionStyle}
-            ownCount={storey.dimensions.length}
-            onChange={(annotations) => setProject({ ...project, annotations })}
-            onUseTool={() => setTool("dimension")}
-          />
-          <ApartmentsPanel
-            storey={storey}
-            infos={apartmentInfos}
-            byApartment={byApartment}
-            config={areaConfig}
-            colorOf={colorOf}
-            layoutBlockers={layoutBlockers}
-            layoutError={layoutError}
-            previewing={previewing}
-            onGenerate={generateLayout}
-            selection={selection}
-            onChange={(s, record) => setStorey(s, record)}
-            onSelect={setSelection}
-          />
-          <AreaTable
-            storey={storey}
-            areas={areas}
-            byApartment={byApartment}
-            buildingAreas={buildingAreas}
-            config={areaConfig}
-            onSelectStorey={openStorey}
-            selection={selection}
-            onSelect={setSelection}
-          />
+          {stage === "lot" && (
+            <LocationPanel
+              project={project}
+              showMap={showMap}
+              onPickOnMap={() => setPickingLocation(true)}
+              onShowMap={setShowMap}
+              onChange={(p) => setProject(p)}
+            />
+          )}
+          {stage === "outline" && (
+            <OutlinePanel project={project} buildingId={building.id} config={areaConfig} onChange={(p) => setProject(p)} />
+          )}
+          {stage === "erker" && (
+            <ErkerPanel project={project} buildingId={building.id} config={areaConfig} onChange={(p) => setProject(p)} />
+          )}
+          {stage === "core" && (
+            <CorePanel project={project} buildingId={building.id} status={status} onChange={(p) => setProject(p)} />
+          )}
+          {stage !== "lot" && stage !== "outline" && (
+            <>
+              <StoreysPanel
+                storeys={storeys}
+                activeId={storey.id}
+                warningCount={warningCount}
+                canRestack={elevationIssues.length > 0}
+                onSelect={openStorey}
+                onAdd={() => {
+                  const r = addStorey(project, building.id);
+                  // The new storey gets the outline, the erker and the core of the building.
+                  store.set(rebuildStructure(r.project, building.id));
+                  openStorey(r.storeyId);
+                }}
+                onCopy={() => {
+                  const r = copyStorey(project, storey.id);
+                  store.set(rebuildStructure(r.project, building.id));
+                  openStorey(r.storeyId);
+                }}
+                onDelete={removeStorey}
+                onRestack={() => store.set(rebuildStructure(restackStoreys(project, building.id), building.id))}
+                onUpdate={(patch) =>
+                  store.set(
+                    patch.elevation === undefined
+                      ? updateStoreyInfo(project, storey.id, patch)
+                      : rebuildStructure(updateStoreyInfo(project, storey.id, patch), building.id),
+                    patch.name === undefined,
+                  )
+                }
+              />
+              <WarningsPanel
+                coreIssues={coreIssues}
+                elevationIssues={elevationIssues}
+                storeyCount={storeys.length}
+                hasCore={hasCore}
+                tolerance={coreConfig.tolerance}
+                onOpenCore={(issue) => {
+                  setActiveStoreyId(issue.storeyId);
+                  setSelection({ kind: "space", id: issue.spaceId });
+                }}
+                onOpenStorey={openStorey}
+              />
+            </>
+          )}
+          {(stage === "lot" || stage === "outline" || stage === "apartments") && (
+            <SitePanel
+              project={project}
+              buildingId={building.id}
+              analysis={siteAnalysis}
+              rules={siteRules}
+              config={areaConfig}
+              siteToolActive={tool === "site"}
+              selection={selection}
+              onChange={(p) => setProject(p)}
+              onSelect={setSelection}
+              onUseSiteTool={() => openStage("lot")}
+            />
+          )}
+          {(stage === "core" || stage === "apartments") && (
+            <PropertiesPanel
+              storey={storey}
+              selection={selection}
+              dimensionStyle={dimensionStyle}
+              onChange={(s) => setStorey(s)}
+              onSelect={setSelection}
+            />
+          )}
+          {stage === "apartments" && (
+            <>
+              <PlanChecksPanel
+                storey={storey}
+                issues={storeyPlanIssues}
+                onOpen={(issue) => issue.spaceId && setSelection({ kind: "space", id: issue.spaceId })}
+              />
+              <DimensionsPanel
+                annotations={project.annotations}
+                style={dimensionStyle}
+                ownCount={storey.dimensions.length}
+                onChange={(annotations) => setProject({ ...project, annotations })}
+                onUseTool={() => setTool("dimension")}
+              />
+              <ApartmentsPanel
+                storey={storey}
+                infos={apartmentInfos}
+                byApartment={byApartment}
+                config={areaConfig}
+                colorOf={colorOf}
+                layoutBlockers={layoutBlockers}
+                layoutError={layoutError}
+                previewing={previewing}
+                onGenerate={generateLayout}
+                selection={selection}
+                onChange={(s, record) => setStorey(s, record)}
+                onSelect={setSelection}
+              />
+              <AreaTable
+                storey={storey}
+                areas={areas}
+                byApartment={byApartment}
+                buildingAreas={buildingAreas}
+                config={areaConfig}
+                onSelectStorey={openStorey}
+                selection={selection}
+                onSelect={setSelection}
+              />
+            </>
+          )}
         </aside>
       </main>
     </div>

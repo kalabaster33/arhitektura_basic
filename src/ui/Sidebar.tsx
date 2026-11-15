@@ -437,6 +437,18 @@ export function PropertiesPanel(props: {
   }
   if (selection?.kind === "wall") {
     const wall = storey.walls.find((w) => w.id === selection.id);
+    if (wall?.part) {
+      return (
+        <section className="panel">
+          <h2>{wall.part === "shell" ? "Outside wall" : "Core wall"}</h2>
+          <p className="hint">
+            This wall belongs to the structure of the building. Change it in the{" "}
+            {wall.part === "shell" ? "Building outline" : "Entrance and core"} step; it is then redrawn
+            on every storey.
+          </p>
+        </section>
+      );
+    }
     if (wall) return <WallPanel storey={storey} wall={wall} onChange={onChange} />;
   }
   if (selection?.kind === "opening") {
@@ -652,7 +664,7 @@ export function StoreysPanel(props: {
           ))}
       </ul>
       <div className="button-row">
-        <button onClick={props.onAdd} title="Add an empty storey on top">
+        <button onClick={props.onAdd} title="Add a storey on top; it gets the outline and the core of the building">
           Add storey
         </button>
         <button onClick={props.onCopy} title="Copy this storey to the top of the building">
@@ -915,7 +927,7 @@ export function SitePanel(props: {
         <p className="hint">
           {props.siteToolActive
             ? "Click the corners of the plot on the plan. Click the first corner again, or press Enter, to close it."
-            : "No plot is drawn. Choose the Site tool and click the corners of the plot on the plan."}
+            : "No plot is drawn. Go to the Lot step and click the corners of the plot on the plan."}
         </p>
       )}
       <table className="figures">
@@ -1050,7 +1062,7 @@ export function SitePanel(props: {
             <p className="hint">
               {props.siteToolActive
                 ? "Click an edge to set its setback, or a corner to type its position. Drag a corner to reshape the plot; drag the building to move it."
-                : "Choose the Site tool to change the plot, its setbacks or the position of the building."}
+                : "Go to the Lot step to change the plot, its setbacks or the position of the building."}
             </p>
           )}
 

@@ -1,7 +1,7 @@
 import { useEffect, useReducer } from "react";
 import editorDefaults from "../config/editorDefaults.json";
 import type { Project } from "../core/model.ts";
-import { createSampleProject, parseProject, serializeProject } from "../core/project.ts";
+import { createProject, parseProject, serializeProject } from "../core/project.ts";
 
 const STORAGE_KEY = "arhitektura.project";
 const HISTORY_LIMIT = 200;
@@ -53,10 +53,15 @@ function initialState(): State {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) project = parseProject(saved);
   } catch {
-    project = null; // unreadable autosave: start from the sample instead
+    project = null; // unreadable autosave: start from an empty lot instead
   }
   return {
-    project: project ?? createSampleProject(editorDefaults.wallThickness),
+    project:
+      project ??
+      createProject("Untitled project", editorDefaults.snapStep, {
+        shell: editorDefaults.wallThickness.exterior,
+        core: editorDefaults.wallThickness.core,
+      }),
     past: [],
     future: [],
   };

@@ -1,12 +1,15 @@
 /** Creating, saving and loading projects as versioned JSON. */
+import type { Pt } from "./geometry.ts";
 import { newId } from "./ids.ts";
 import {
   type Building,
   type Project,
   type Storey,
+  type Structure,
   type Wall,
   type WallKind,
   SCHEMA_VERSION,
+  STAGES,
 } from "./model.ts";
 import { syncSpaces } from "./spaces.ts";
 
@@ -25,8 +28,29 @@ export function createStorey(name = "Ground floor", height = 3): Storey {
   };
 }
 
-export function createProject(name = "Untitled project", snap = 0.05): Project {
-  const building: Building = { id: newId("building"), name: "Building A", storeys: [createStorey()] };
+/** A building structure with nothing drawn yet. */
+export function emptyStructure(wallThickness = 0.25, coreWallThickness = 0.2): Structure {
+  return {
+    footprint: [],
+    wallThickness,
+    coreWallThickness,
+    erker: { depth: 0, edges: [] },
+    core: [],
+  };
+}
+
+/** An empty lot: no plot, no building outline, the workflow at its first step. */
+export function createProject(
+  name = "Untitled project",
+  snap = 0.05,
+  thickness: { shell: number; core: number } = { shell: 0.25, core: 0.2 },
+): Project {
+  const building: Building = {
+    id: newId("building"),
+    name: "Building A",
+    storeys: [createStorey()],
+    structure: emptyStructure(thickness.shell, thickness.core),
+  };
   return {
     schemaVersion: SCHEMA_VERSION,
     id: newId("project"),
@@ -34,6 +58,7 @@ export function createProject(name = "Untitled project", snap = 0.05): Project {
     units: "m",
     grid: { snap },
     annotations: { outsideDimensions: true, roomDimensions: true, openingTags: true, levelMarks: true },
+    stage: "lot",
     site: {
       id: newId("site"),
       name: "Site",
@@ -41,6 +66,7 @@ export function createProject(name = "Untitled project", snap = 0.05): Project {
       setbacks: [],
       limits: { maxCoverage: null, maxFloorAreaRatio: null },
       north: 0,
+      location: null,
       buildings: [building],
     },
   };
@@ -50,7 +76,8 @@ export function createProject(name = "Untitled project", snap = 0.05): Project {
 export function createSampleProject(
   thickness: Record<WallKind, number> = { exterior: 0.25, interior: 0.1 },
 ): Project {
-  const project = createProject("Sample plan");
+  // Drawn freely, without a building structure: it opens at the apartments step.
+  const project: Project = { ...createProject("Sample plan"), stage: "apartments" };
   const wall = (x1: number, y1: number, x2: number, y2: number, kind: WallKind): Wall => ({
     id: newId("wall"),
     a: { x: x1, y: y1 },
@@ -136,7 +163,55 @@ const MIGRATIONS: Record<number, (data: any) => any> = {
     annotations: { ...data.annotations, openingTags: true, levelMarks: true },
     site: { ...data.site, north: 0 },
   }),
+  // Version 5 stores the workflow step, the place of the plot on the earth and
+  // the structure of each building. A plan drawn before this has no structure
+  // and carries on at the apartments step.
+  4: (data) => {
+    const buildings = Array.isArray(data.site?.buildings) ? data.site.buildings : [];
+    const drawn = buildings.some((b: any) =>
+      (Array.isArray(b.storeys) ? b.storeys : []).some((s: any) => Array.isArray(s.walls) && s.walls.length > 0),
+    );
+    return {
+      ...data,
+      schemaVersion: 5,
+      stage: drawn ? "apartments" : "lot",
+      site: {
+        ...data.site,
+        location: null,
+        buildings: buildings.map((b: any) => ({ ...b, structure: emptyStructure() })),
+      },
+    };
+  },
 };
+
+const isPt = (p: any) => Number.isFinite(p?.x) && Number.isFinite(p?.y);
+
+/** A structure read from a file, with anything unusable left out. */
+function cleanStructure(raw: any): Structure {
+  const base = emptyStructure();
+  const corners = Array.isArray(raw?.footprint) ? raw.footprint : [];
+  const footprint: Pt[] =
+    corners.length >= 3 && corners.every(isPt) ? corners.map((p: any) => ({ x: p.x, y: p.y })) : [];
+  const positive = (v: unknown, fallback: number) =>
+    typeof v === "number" && Number.isFinite(v) && v > 0 ? v : fallback;
+  const depth = raw?.erker?.depth;
+  const edges = Array.isArray(raw?.erker?.edges) ? raw.erker.edges : [];
+  return {
+    footprint,
+    wallThickness: positive(raw?.wallThickness, base.wallThickness),
+    coreWallThickness: positive(raw?.coreWallThickness, base.coreWallThickness),
+    erker: {
+      depth: typeof depth === "number" && Number.isFinite(depth) && depth > 0 ? depth : 0,
+      edges: footprint.map((_, i) => edges[i] !== false),
+    },
+    core: (Array.isArray(raw?.core) ? raw.core : [])
+      .filter(
+        (c: any) =>
+          typeof c?.id === "string" && ["hall", "stair", "elevator"].includes(c.kind) && isPt(c.a) && isPt(c.b),
+      )
+      .map((c: any) => ({ id: c.id, kind: c.kind, a: { x: c.a.x, y: c.a.y }, b: { x: c.b.x, y: c.b.y } })),
+  };
+}
 
 /** Parses a saved project; throws a readable error when the file cannot be used. */
 export function parseProject(json: string): Project {
@@ -167,6 +242,7 @@ export function parseProject(json: string): Project {
     if (!Array.isArray(b.storeys) || b.storeys.length === 0) {
       throw new Error(`Building "${b.name}" has no storey.`);
     }
+    b.structure = cleanStructure(b.structure);
     for (const s of b.storeys) {
       for (const key of ["walls", "openings", "spaces", "apartments", "circulation"]) {
         if (!Array.isArray(s[key])) throw new Error(`Storey "${s.name}" has no "${key}" list.`);
@@ -216,5 +292,11 @@ export function parseProject(json: string): Project {
   };
   const north = Number.isFinite(site.north) ? site.north % 360 : 0;
   site.north = north < 0 ? north + 360 : north;
+  const { lat, lon } = site.location ?? {};
+  site.location =
+    Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 85 && Math.abs(lon) <= 180
+      ? { lat, lon }
+      : null;
+  if (!STAGES.includes(data.stage)) data.stage = "lot";
   return data as Project;
 }
