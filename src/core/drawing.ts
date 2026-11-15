@@ -18,6 +18,7 @@ export const LAYER_KEYS = [
   "doors",
   "windows",
   "rooms",
+  "dimensions",
   "plot",
   "buildable",
   "footprint",
@@ -36,8 +37,12 @@ export type Entity =
    * measured in model coordinates: a point is centre + radius * (cos, sin).
    */
   | { kind: "arc"; layer: LayerKey; centre: Pt; radius: number; start: number; sweep: number }
-  /** One line of lettering, centred on `at`. `height` is in metres. */
-  | { kind: "text"; layer: LayerKey; at: Pt; text: string; height: number; bold?: boolean };
+  /**
+   * One line of lettering, centred on `at`. `height` is in metres. `angle`
+   * turns it about `at`, in radians in model coordinates: the lettering runs
+   * in the direction (cos, sin), so -PI/2 reads from the bottom of the plan up.
+   */
+  | { kind: "text"; layer: LayerKey; at: Pt; text: string; height: number; bold?: boolean; angle?: number };
 
 export interface Bounds {
   minX: number;
@@ -76,9 +81,11 @@ function extentPoints(e: Entity): Pt[] {
     case "text": {
       // Lettering is roughly 0.6 of its height wide per character.
       const half = (e.text.length * e.height * 0.6) / 2;
+      // Turned lettering: allow for it in every direction.
+      const tall = e.angle ? half : e.height / 2;
       return [
-        { x: e.at.x - half, y: e.at.y - e.height / 2 },
-        { x: e.at.x + half, y: e.at.y + e.height / 2 },
+        { x: e.at.x - half, y: e.at.y - tall },
+        { x: e.at.x + half, y: e.at.y + tall },
       ];
     }
   }
@@ -101,6 +108,11 @@ export function boundsOf(entities: Entity[]): Bounds | null {
 }
 
 const makeDrawing = (entities: Entity[]): Drawing => ({ entities, bounds: boundsOf(entities) });
+
+/** The same drawing with more on it. */
+export function addEntities(drawing: Drawing, extra: Entity[]): Drawing {
+  return extra.length ? makeDrawing([...drawing.entities, ...extra]) : drawing;
+}
 
 /** The same drawing moved by (dx, dy). */
 export function translateDrawing(drawing: Drawing, dx: number, dy: number): Drawing {

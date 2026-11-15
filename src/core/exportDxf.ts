@@ -189,6 +189,8 @@ export function writeDxf(sheets: Sheet[], config: ExportConfig): string {
           g(20, -e.at.y - e.height / 2);
           g(40, e.height);
           g(1, dxfText(e.text));
+          // Flipping y turns the lettering the other way round.
+          if (e.angle) g(50, (((-e.angle * 180) / Math.PI) % 360 + 360) % 360);
           g(72, "1"); // centred left to right ...
           g(73, "2"); // ... and top to bottom on the point below
           g(11, e.at.x);

@@ -1,0 +1,14 @@
+{
+  "_doc": "How dimensions are written and drawn. Drawing conventions only, not design rules. unit: 'cm', 'm' or 'mm'. decimals: decimals shown; a value that is not whole at that many decimals gets one more (12.5 cm stays 12.5). measureTo: what the automatic 'rooms' chain measures between, 'faces' (clear room sizes and wall thicknesses) or 'centrelines' (wall axis to wall axis). The sizes below are millimetres on paper; on screen the plan is treated as if drawn at 1:screenScale. textHeightMm: height of the figures. firstChainMm: distance of the first chain from the building. chainSpacingMm: distance between chains. tickMm: length of the slanted stroke at each end of a dimension. extensionMm: how far lines run past the dimension line. textGapMm: gap between a figure and its line. roomInsetMm: how far a room's own dimension lines sit from its label and its wall.",
+  "unit": "cm",
+  "decimals": 0,
+  "measureTo": "faces",
+  "screenScale": 100,
+  "textHeightMm": 2,
+  "firstChainMm": 10,
+  "chainSpacingMm": 7,
+  "tickMm": 2,
+  "extensionMm": 1.5,
+  "textGapMm": 0.8,
+  "roomInsetMm": 6
+}

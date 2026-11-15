@@ -986,3 +986,51 @@ input.is-invalid {
   gap: 8px;
   margin-top: 16px;
 }
+
+/* ------------------------------------------------------------- dimensions */
+
+.plan--dimension {
+  cursor: crosshair;
+}
+
+.dim__line {
+  fill: none;
+  stroke: #5a5f69;
+}
+
+.dim__text {
+  text-anchor: middle;
+  dominant-baseline: central;
+  fill: #3b3f47;
+  font-variant-numeric: tabular-nums;
+}
+
+.dim--own .dim__line {
+  stroke: #2d6a4f;
+}
+
+.dim--own .dim__text {
+  fill: #2d6a4f;
+}
+
+.dim.is-selected .dim__line {
+  stroke: var(--accent);
+}
+
+.dim.is-selected .dim__text {
+  fill: var(--accent);
+}
+
+.dim__hit {
+  stroke: transparent;
+  cursor: pointer;
+}
+
+.dim__draft {
+  stroke: var(--accent);
+  stroke-dasharray: 0.08 0.06;
+}
+
+.dimensions__own {
+  margin: 10px 0 0;
+}

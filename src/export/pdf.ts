@@ -76,6 +76,25 @@ export async function writePdf(
     doc.setTextColor(0);
     doc.text(value, x, y, { align: opts.align ?? "left", baseline: opts.baseline ?? "alphabetic" });
   };
+  /**
+   * Lettering centred on a point and turned by `angle` (radians, y down). The
+   * library turns text about the start of its baseline, so that point is
+   * worked out here.
+   */
+  const turnedText = (value: string, centre: Pt, capMm: number, angle: number) => {
+    doc.setFont(FONT, "normal");
+    doc.setFontSize(capMm / CAP_HEIGHT / MM_PER_PT);
+    doc.setTextColor(0);
+    const width = doc.getTextWidth(value);
+    const dir = { x: Math.cos(angle), y: Math.sin(angle) };
+    const up = { x: Math.sin(angle), y: -Math.cos(angle) };
+    doc.text(
+      value,
+      centre.x - (dir.x * width) / 2 - (up.x * capMm) / 2,
+      centre.y - (dir.y * width) / 2 - (up.y * capMm) / 2,
+      { angle: (-angle * 180) / Math.PI },
+    );
+  };
 
   sheets.forEach((sheet, index) => {
     const layout = layouts[index];
@@ -117,6 +136,10 @@ export async function writePdf(
           break;
         case "text": {
           const p = at(e.at);
+          if (e.angle !== undefined) {
+            turnedText(e.text, p, e.height * k, e.angle);
+            break;
+          }
           text(e.text, p.x, p.y, (e.height * k) / CAP_HEIGHT / MM_PER_PT, {
             bold: e.bold,
             align: "center",

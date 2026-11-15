@@ -3,6 +3,7 @@ import { join } from "node:path";
 import ExcelJS from "exceljs";
 import { describe, expect, it } from "vitest";
 import areaDefinitions from "../config/areaDefinitions.json";
+import dimensionStyleJson from "../config/dimensionStyle.json";
 import exportDefaults from "../config/exportDefaults.json";
 import siteRulesJson from "../config/siteRules.json";
 import { fileBase } from "../export/download.ts";
@@ -11,6 +12,7 @@ import { writeXlsx } from "../export/xlsx.ts";
 import { createApartment } from "./apartments.ts";
 import { computeBuildingAreas, computeStoreyAreas, parseAreaConfig } from "./areas.ts";
 import { copyStorey, sortedStoreys } from "./building.ts";
+import { parseDimensionStyle } from "./dimensions.ts";
 import { type Entity, arcPoints, siteDrawing, storeyDrawing, translateDrawing, wallRegion } from "./drawing.ts";
 import { arrangeForDxf, dxfText, writeDxf } from "./exportDxf.ts";
 import { type Cell, buildSchedule, cellValue } from "./exportSchedule.ts";
@@ -227,7 +229,18 @@ describe("sheets", () => {
 
 describe("DXF", () => {
   it("is a complete file with a layer for every kind of line", () => {
-    const dxf = writeDxf(sheetsOf(withSite()), config);
+    const project = withSite();
+    const dxf = writeDxf(
+      buildSheets(
+        project,
+        { storeyIds: allStoreyIds(project), includeSite: true, scale: 100, siteScale: 200 },
+        areaConfig,
+        analyse(project),
+        config,
+        parseDimensionStyle(dimensionStyleJson),
+      ),
+      config,
+    );
     expect(dxf.startsWith("0\r\nSECTION\r\n2\r\nHEADER")).toBe(true);
     expect(dxf.endsWith("0\r\nEOF\r\n")).toBe(true);
     expect(dxf.split("\r\n").length % 2).toBe(1); // code/value pairs and a final line break

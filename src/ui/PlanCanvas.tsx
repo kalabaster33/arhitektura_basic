@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { moveBuilding } from "../core/building.ts";
+import {
+  type DimChain,
+  type DimensionStyle,
+  addDimension,
+  chainEntities,
+  dimensionSnapPoints,
+  formatDimension,
+  offsetFromLine,
+  ownChain,
+} from "../core/dimensions.ts";
+import type { Entity } from "../core/drawing.ts";
 import { addWall, moveNode, moveWall } from "../core/edit.ts";
 import {
   type Pt,
@@ -22,9 +33,9 @@ import {
 import { type Region, type SiteAnalysis, boundaryProblem, moveBoundaryCorner } from "../core/site.ts";
 import type { Face } from "../core/topology.ts";
 
-export type Tool = "select" | "wall" | "door" | "window" | "site";
+export type Tool = "select" | "wall" | "door" | "window" | "dimension" | "site";
 export type Selection =
-  | { kind: "wall" | "space" | "opening"; id: string }
+  | { kind: "wall" | "space" | "opening" | "dimension"; id: string }
   /** A corner of the plot, or the edge that starts at that corner. */
   | { kind: "siteCorner" | "siteEdge"; index: number }
   | null;
@@ -68,6 +79,9 @@ interface Props {
   /** The building the shown storey belongs to. */
   buildingId: string;
   site: SiteAnalysis;
+  /** Every dimension of the storey that is to be shown, hand-placed ones included. */
+  dimensionChains: DimChain[];
+  dimensionStyle: DimensionStyle;
   /** A plot outline drawn with the site tool, already checked. */
   onPlotDrawn: (corners: Pt[]) => void;
   onProjectChange: (project: Project, record: boolean) => void;
@@ -96,6 +110,42 @@ const WALL_REACH_PX = 28;
 const ringPath = (ring: Pt[]) =>
   ring.length ? `M${ring.map((p) => `${p.x},${p.y}`).join("L")}Z` : "";
 const regionPath = (region: Region) => region.map((poly) => poly.map(ringPath).join("")).join("");
+
+/** Height of a capital letter as a share of the font size, near enough for any sans-serif. */
+const CAP_HEIGHT = 0.714;
+
+/** Dimension lines and figures, sized in metres so they sit on the plan as they will on paper. */
+function DimensionShapes(props: { entities: Entity[]; px: number; className?: string }) {
+  return (
+    <g className={`dim ${props.className ?? ""}`} pointerEvents="none">
+      {props.entities.map((e, i) => {
+        if (e.kind === "polyline") {
+          return (
+            <path
+              key={i}
+              d={`M${e.points.map((p) => `${p.x},${p.y}`).join("L")}`}
+              className="dim__line"
+              strokeWidth={props.px}
+            />
+          );
+        }
+        if (e.kind !== "text") return null;
+        return (
+          <text
+            key={i}
+            x={e.at.x}
+            y={e.at.y}
+            fontSize={e.height / CAP_HEIGHT}
+            transform={e.angle ? `rotate(${(e.angle * 180) / Math.PI} ${e.at.x} ${e.at.y})` : undefined}
+            className="dim__text"
+          >
+            {e.text}
+          </text>
+        );
+      })}
+    </g>
+  );
+}
 
 /**
  * Plan symbol of a door (gap, leaf and swing arc) or a window (frame and glass
@@ -158,6 +208,8 @@ export function PlanCanvas(props: Props) {
   /** Corners of a plot outline being drawn with the site tool. */
   const [plotDraft, setPlotDraft] = useState<Pt[]>([]);
   const [plotError, setPlotError] = useState<string | null>(null);
+  /** A dimension being placed: its first point, then its second; the third click sets the line. */
+  const [dimDraft, setDimDraft] = useState<{ a: Pt; b: Pt | null } | null>(null);
   const drag = useRef<Drag | null>(null);
   const fitted = useRef(false);
   const plot = props.project.site.boundary;
@@ -175,7 +227,11 @@ export function PlanCanvas(props: Props) {
 
   const fit = useCallback(() => {
     if (size.w === 0 || size.h === 0) return;
-    const pts = [...storey.walls.flatMap((w) => [w.a, w.b]), ...plot];
+    const pts = [
+      ...storey.walls.flatMap((w) => [w.a, w.b]),
+      ...plot,
+      ...props.dimensionChains.flatMap((c) => c.spans.flatMap((s) => [s.from, s.to])),
+    ];
     if (pts.length === 0) {
       setView({ ox: -1, oy: -1, zoom: 60 });
       return;
@@ -192,7 +248,7 @@ export function PlanCanvas(props: Props) {
       ox: minX - (size.w / zoom - w) / 2,
       oy: minY - (size.h / zoom - h) / 2,
     });
-  }, [size, storey.walls, plot]);
+  }, [size, storey.walls, plot, props.dimensionChains]);
 
   useEffect(() => {
     if (!fitted.current && size.w > 0) {
@@ -207,6 +263,7 @@ export function PlanCanvas(props: Props) {
     setPlacing(null);
     setPlotDraft([]);
     setPlotError(null);
+    setDimDraft(null);
   }, [tool]);
 
   /** Closes the outline being drawn, or says why it cannot be a plot. */
@@ -229,6 +286,7 @@ export function PlanCanvas(props: Props) {
         setChainStart(null);
         setPlotDraft([]);
         setPlotError(null);
+        setDimDraft(null);
       } else if (e.key === "Enter" && liveDraft.current.plotDraft.length > 0) {
         liveDraft.current.finishPlot(liveDraft.current.plotDraft);
       }
@@ -283,6 +341,26 @@ export function PlanCanvas(props: Props) {
     return best ?? snapPoint(p, snapStep);
   };
 
+  /** For the dimension tool: a nearby wall corner, opening jamb or wall end, else the grid. */
+  const snapPoints = useMemo(
+    () => (tool === "dimension" ? dimensionSnapPoints(storey) : []),
+    [tool, storey.walls, storey.openings],
+  );
+  const dimSnap = (p: Pt): Pt => {
+    let best: Pt | null = null;
+    let bestD = SNAP_PX / view.zoom;
+    for (const q of snapPoints) {
+      const d = dist(p, q);
+      if (d < bestD) {
+        bestD = d;
+        best = q;
+      }
+    }
+    return best ?? snapPoint(p, snapStep);
+  };
+  /** How far from its two points the dimension being placed would sit with the pointer at `p`. */
+  const draftOffset = (a: Pt, b: Pt, p: Pt) => roundTo(offsetFromLine(a, b, p), snapStep);
+
   /** While drawing, Shift keeps the new wall horizontal or vertical. */
   const drawPoint = (e: React.PointerEvent): Pt => {
     const p = snap(toModel(e));
@@ -332,6 +410,21 @@ export function PlanCanvas(props: Props) {
       }
       return;
     }
+    if (tool === "dimension") {
+      if (!dimDraft) {
+        setDimDraft({ a: dimSnap(toModel(e)), b: null });
+      } else if (!dimDraft.b) {
+        const b = dimSnap(toModel(e));
+        if (!samePoint(b, dimDraft.a)) setDimDraft({ a: dimDraft.a, b });
+      } else {
+        const next = addDimension(storey, dimDraft.a, dimDraft.b, draftOffset(dimDraft.a, dimDraft.b, toModel(e)));
+        setDimDraft(null);
+        if (next === storey) return;
+        onChange(next, true);
+        onSelect({ kind: "dimension", id: next.dimensions[next.dimensions.length - 1].id });
+      }
+      return;
+    }
     if (tool !== "wall") return;
     const p = drawPoint(e);
     if (!chainStart) {
@@ -347,7 +440,13 @@ export function PlanCanvas(props: Props) {
   const onMove = (e: React.PointerEvent) => {
     const d = drag.current;
     if (!d) {
-      setCursor(tool === "wall" ? drawPoint(e) : snapPoint(toModel(e), snapStep));
+      setCursor(
+        tool === "wall"
+          ? drawPoint(e)
+          : tool === "dimension" && !dimDraft?.b
+            ? dimSnap(toModel(e))
+            : snapPoint(toModel(e), snapStep),
+      );
       if (tool === "door" || tool === "window") setPlacing(placeAt(e, tool));
       return;
     }
@@ -483,6 +582,19 @@ export function PlanCanvas(props: Props) {
   const placingKind = tool === "door" || tool === "window" ? tool : null;
   const placingWall = placing && placingKind ? wallById.get(placing.wallId) : undefined;
   const siteTool = tool === "site";
+  const dimScale = props.dimensionStyle.screenScale;
+  const [autoDims, ownDims] = useMemo(() => {
+    const own = props.dimensionChains.filter((c) => c.kind === "own");
+    const auto = props.dimensionChains.filter((c) => c.kind !== "own");
+    return [
+      chainEntities(auto, props.dimensionStyle, dimScale),
+      own.map((chain) => ({ chain, entities: chainEntities([chain], props.dimensionStyle, dimScale) })),
+    ];
+  }, [props.dimensionChains, props.dimensionStyle, dimScale]);
+  const draftChain =
+    dimDraft?.b && cursor
+      ? ownChain({ id: "draft", a: dimDraft.a, b: dimDraft.b, offset: draftOffset(dimDraft.a, dimDraft.b, cursor) })
+      : null;
   const drawingPlot = siteTool && !hasPlot;
   /** Which side of its edges the inside of the plot is on: 1 for left, -1 for right. */
   const plotSide = useMemo(() => (ringSignedArea(plot) >= 0 ? 1 : -1), [plot]);
@@ -504,6 +616,7 @@ export function PlanCanvas(props: Props) {
         setChainStart(null);
         setPlotDraft([]);
         setPlotError(null);
+        setDimDraft(null);
       }}
     >
       <defs>
@@ -803,6 +916,61 @@ export function PlanCanvas(props: Props) {
             />
           ))}
 
+        <DimensionShapes entities={autoDims} px={px} />
+        {ownDims.map(({ chain, entities }) => {
+          const selected = selection?.kind === "dimension" && selection.id === chain.id;
+          const span = chain.spans[0];
+          return (
+            <g key={chain.id}>
+              <DimensionShapes entities={entities} px={px} className={selected ? "is-selected" : "dim--own"} />
+              {interactive && (
+                <line
+                  x1={span.from.x}
+                  y1={span.from.y}
+                  x2={span.to.x}
+                  y2={span.to.y}
+                  strokeWidth={12 * px}
+                  className="dim__hit"
+                  onPointerDown={(e) => {
+                    if (e.button !== 0) return;
+                    e.stopPropagation();
+                    onSelect({ kind: "dimension", id: chain.id! });
+                  }}
+                />
+              )}
+            </g>
+          );
+        })}
+        {dimDraft && !dimDraft.b && cursor && (
+          <>
+            <line
+              x1={dimDraft.a.x}
+              y1={dimDraft.a.y}
+              x2={cursor.x}
+              y2={cursor.y}
+              strokeWidth={px}
+              className="dim__draft"
+              pointerEvents="none"
+            />
+            <text
+              x={(dimDraft.a.x + cursor.x) / 2}
+              y={(dimDraft.a.y + cursor.y) / 2 - 10 * px}
+              fontSize={12 * px}
+              className="dimension"
+              pointerEvents="none"
+            >
+              {formatDimension(dist(dimDraft.a, cursor), props.dimensionStyle)} {props.dimensionStyle.unit}
+            </text>
+          </>
+        )}
+        {draftChain && (
+          <DimensionShapes
+            entities={chainEntities([draftChain], props.dimensionStyle, dimScale)}
+            px={px}
+            className="is-selected"
+          />
+        )}
+
         {preview && (
           <>
             <line
@@ -826,7 +994,7 @@ export function PlanCanvas(props: Props) {
             </text>
           </>
         )}
-        {(tool === "wall" || drawingPlot) && cursor && (
+        {(tool === "wall" || drawingPlot || (tool === "dimension" && !dimDraft?.b)) && cursor && (
           <circle cx={cursor.x} cy={cursor.y} r={4 * px} strokeWidth={1.5 * px} className="snap-dot" pointerEvents="none" />
         )}
       </g>

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import areaDefinitions from "../config/areaDefinitions.json";
+import dimensionStyleJson from "../config/dimensionStyle.json";
 import coreAlignment from "../config/coreAlignment.json";
 import editorDefaults from "../config/editorDefaults.json";
 import exportDefaults from "../config/exportDefaults.json";
@@ -44,6 +45,7 @@ import {
   serializeProject,
 } from "../core/project.ts";
 import { analyseSite, deleteBoundaryCorner, parseSiteRules, setBoundary } from "../core/site.ts";
+import { deleteDimension, parseDimensionStyle, storeyChains } from "../core/dimensions.ts";
 import { parseExportConfig } from "../core/sheets.ts";
 import { linkSpaces } from "../core/spaces.ts";
 import { download, fileBase } from "../export/download.ts";
@@ -62,6 +64,7 @@ import {
   PlanChecksPanel,
   PropertiesPanel,
   SitePanel,
+  DimensionsPanel,
   StoreysPanel,
   WarningsPanel,
 } from "./Sidebar.tsx";
@@ -73,6 +76,7 @@ const roomCheckConfig = parseRoomCheckConfig(roomChecks);
 const layoutRuleSet = parseLayoutRules(layoutRules);
 const siteRules = parseSiteRules(siteRulesJson);
 const exportConfig = parseExportConfig(exportDefaults);
+const dimensionStyle = parseDimensionStyle(dimensionStyleJson);
 /** Printed on the Notes sheet of an exported schedule. */
 const exportNotes = [areaDefinitions._status, siteRulesJson._status];
 
@@ -101,6 +105,7 @@ const TOOLS: { tool: Tool; label: string; title: string }[] = [
   { tool: "wall", label: "Wall", title: "Draw walls (W)" },
   { tool: "door", label: "Door", title: "Place doors on walls (D)" },
   { tool: "window", label: "Window", title: "Place windows on walls (N)" },
+  { tool: "dimension", label: "Dimension", title: "Place a dimension between two points (M)" },
   { tool: "site", label: "Site", title: "Draw the plot, set setbacks and move the building (S)" },
 ];
 
@@ -110,6 +115,8 @@ const STATUS: Record<Tool, string> = {
   wall: "Click to place wall ends · Shift keeps it straight · Esc or right-click ends the run",
   door: "Move over a wall and click to place a door · it snaps to where it fits",
   window: "Move over a wall and click to place a window · it snaps to where it fits",
+  dimension:
+    "Click the two points to measure, then click where the dimension line goes · it snaps to wall corners and opening edges · Esc starts again",
   site: "Click an edge for its setback · drag a corner to reshape the plot · drag the building to move it · drag empty space to pan",
 };
 
@@ -134,6 +141,10 @@ export function App() {
   const fileInput = useRef<HTMLInputElement>(null);
 
   const linked = useMemo(() => linkSpaces(storey), [storey]);
+  const dimensionChains = useMemo(
+    () => storeyChains(storey, project.annotations, dimensionStyle, dimensionStyle.screenScale, linked),
+    [storey, project.annotations, linked],
+  );
   const areas = useMemo(() => computeStoreyAreas(storey, areaConfig), [storey]);
   const netById = useMemo(() => new Map(areas.spaces.map((s) => [s.spaceId, s.net])), [areas]);
   const byApartment = useMemo(() => computeApartmentAreas(storey, areaConfig, areas), [storey, areas]);
@@ -302,7 +313,13 @@ export function App() {
       else if (!mod && key === "w") setTool("wall");
       else if (!mod && key === "d") setTool("door");
       else if (!mod && key === "n") setTool("window");
+      else if (!mod && key === "m") setTool("dimension");
       else if (!mod && key === "s") setTool("site");
+      else if ((e.key === "Delete" || e.key === "Backspace") && selection?.kind === "dimension") {
+        e.preventDefault();
+        setStorey(deleteDimension(storey, selection.id));
+        setSelection(null);
+      }
       else if ((e.key === "Delete" || e.key === "Backspace") && selection?.kind === "siteCorner") {
         e.preventDefault();
         setProject(deleteBoundaryCorner(project, selection.index));
@@ -437,6 +454,7 @@ export function App() {
           areaConfig={areaConfig}
           analysis={siteAnalysis}
           config={exportConfig}
+          dimensionStyle={dimensionStyle}
           footprintRule={siteRules.footprint === "allStoreys" ? "all storeys seen from above" : "lowest storey only"}
           notes={exportNotes}
           onClose={() => setExporting(false)}
@@ -493,6 +511,8 @@ export function App() {
             project={project}
             buildingId={building.id}
             site={siteAnalysis}
+            dimensionChains={dimensionChains}
+            dimensionStyle={dimensionStyle}
             onPlotDrawn={(corners) => {
               setProject(
                 setBoundary(project, corners, siteRules.defaultSetback, {
@@ -567,7 +587,20 @@ export function App() {
             issues={storeyPlanIssues}
             onOpen={(issue) => issue.spaceId && setSelection({ kind: "space", id: issue.spaceId })}
           />
-          <PropertiesPanel storey={storey} selection={selection} onChange={(s) => setStorey(s)} />
+          <PropertiesPanel
+            storey={storey}
+            selection={selection}
+            dimensionStyle={dimensionStyle}
+            onChange={(s) => setStorey(s)}
+            onSelect={setSelection}
+          />
+          <DimensionsPanel
+            annotations={project.annotations}
+            style={dimensionStyle}
+            ownCount={storey.dimensions.length}
+            onChange={(annotations) => setProject({ ...project, annotations })}
+            onUseTool={() => setTool("dimension")}
+          />
           <ApartmentsPanel
             storey={storey}
             infos={apartmentInfos}

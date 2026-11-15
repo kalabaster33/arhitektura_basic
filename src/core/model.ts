@@ -8,7 +8,7 @@
  */
 import type { Pt } from "./geometry.ts";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export type WallKind = "exterior" | "interior";
 
@@ -81,6 +81,18 @@ export interface CirculationElement {
   spaceId?: string;
 }
 
+/**
+ * A dimension placed by hand: the distance between two points, written on a
+ * line parallel to them. It stays where it was put when walls move.
+ */
+export interface Dimension {
+  id: string;
+  a: Pt;
+  b: Pt;
+  /** How far the dimension line is from the two points, to the left of a -> b. */
+  offset: number;
+}
+
 export interface Storey {
   id: string;
   name: string;
@@ -93,6 +105,8 @@ export interface Storey {
   spaces: Space[];
   apartments: Apartment[];
   circulation: CirculationElement[];
+  /** Dimensions placed by hand. The automatic ones are worked out, not stored. */
+  dimensions: Dimension[];
 }
 
 export interface Building {
@@ -120,6 +134,14 @@ export interface Site {
   buildings: Building[];
 }
 
+/** Which automatic annotations are drawn on the plans. */
+export interface Annotations {
+  /** Dimension chains around the building. */
+  outsideDimensions: boolean;
+  /** Clear width and length of every room. */
+  roomDimensions: boolean;
+}
+
 export interface Project {
   schemaVersion: number;
   id: string;
@@ -129,5 +151,6 @@ export interface Project {
     /** Snap step in metres. */
     snap: number;
   };
+  annotations: Annotations;
   site: Site;
 }

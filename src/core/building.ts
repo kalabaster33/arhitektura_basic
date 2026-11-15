@@ -61,6 +61,7 @@ export function addStorey(
     spaces: [],
     apartments: [],
     circulation: [],
+    dimensions: [],
   };
   return {
     project: replaceBuilding(project, { ...building, storeys: [...building.storeys, storey] }),
@@ -108,6 +109,7 @@ export function copyStorey(
       id: newId("circulation"),
       spaceId: c.spaceId ? spaceIds.get(c.spaceId) : undefined,
     })),
+    dimensions: source.dimensions.map((d) => ({ ...d, id: newId("dimension"), a: { ...d.a }, b: { ...d.b } })),
   };
   return {
     project: replaceBuilding(project, { ...building, storeys: [...building.storeys, copy] }),
@@ -174,6 +176,7 @@ export function moveBuilding(project: Project, buildingId: string, delta: Pt): P
       ...s,
       walls: s.walls.map((w) => ({ ...w, a: shift(w.a), b: shift(w.b) })),
       spaces: s.spaces.map((x) => ({ ...x, anchor: shift(x.anchor) })),
+      dimensions: s.dimensions.map((d) => ({ ...d, a: shift(d.a), b: shift(d.b) })),
     })),
   });
 }

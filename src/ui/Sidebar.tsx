@@ -18,9 +18,11 @@ import {
 import { type ElevationIssue, moveBuilding } from "../core/building.ts";
 import type { PlanIssue } from "../core/checks.ts";
 import type { CoreIssue } from "../core/coreAlignment.ts";
+import { type DimensionStyle, deleteDimension, formatDimension } from "../core/dimensions.ts";
 import { moveNode, setWallKind, setWallLength, setWallThickness, updateSpace } from "../core/edit.ts";
 import { type Pt, dist } from "../core/geometry.ts";
 import {
+  type Annotations,
   type Opening,
   type OpeningKind,
   type Project,
@@ -393,9 +395,45 @@ export function AreaTable(props: {
 export function PropertiesPanel(props: {
   storey: Storey;
   selection: Selection;
+  dimensionStyle: DimensionStyle;
   onChange: (s: Storey) => void;
+  onSelect: (s: Selection) => void;
 }) {
   const { storey, selection, onChange } = props;
+  if (selection?.kind === "dimension") {
+    const d = storey.dimensions.find((x) => x.id === selection.id);
+    if (d) {
+      return (
+        <section className="panel">
+          <h2>Dimension</h2>
+          <table className="figures">
+            <tbody>
+              <tr>
+                <th>Length</th>
+                <td>
+                  {formatDimension(dist(d.a, d.b), props.dimensionStyle)} {props.dimensionStyle.unit}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div className="button-row">
+            <button
+              onClick={() => {
+                onChange(deleteDimension(storey, d.id));
+                props.onSelect(null);
+              }}
+            >
+              Delete dimension
+            </button>
+          </div>
+          <p className="hint">
+            A dimension you place stays where you put it. If you move the walls it measured, delete
+            it and place it again.
+          </p>
+        </section>
+      );
+    }
+  }
   if (selection?.kind === "wall") {
     const wall = storey.walls.find((w) => w.id === selection.id);
     if (wall) return <WallPanel storey={storey} wall={wall} onChange={onChange} />;
@@ -1002,6 +1040,55 @@ export function SitePanel(props: {
         Setbacks and limits come from the planning conditions of the plot. The starting values and
         the footprint definition are placeholders — to be verified by a licensed engineer
         (src/config/siteRules.json).
+      </p>
+    </section>
+  );
+}
+
+/** Which automatic dimensions are shown, and how to place your own. */
+export function DimensionsPanel(props: {
+  annotations: Annotations;
+  style: DimensionStyle;
+  ownCount: number;
+  onChange: (annotations: Annotations) => void;
+  onUseTool: () => void;
+}) {
+  const { annotations, style } = props;
+  return (
+    <section className="panel">
+      <h2>
+        Dimensions <small>in {style.unit}</small>
+      </h2>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={annotations.outsideDimensions}
+          onChange={(e) => props.onChange({ ...annotations, outsideDimensions: e.target.checked })}
+        />
+        Chains around the building
+      </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={annotations.roomDimensions}
+          onChange={(e) => props.onChange({ ...annotations, roomDimensions: e.target.checked })}
+        />
+        Width and length of rooms
+      </label>
+      <div className="button-row dimensions__own">
+        <button onClick={props.onUseTool} title="Dimension tool (M)">
+          Place a dimension
+        </button>
+      </div>
+      <p className="hint">
+        {props.ownCount === 0
+          ? "No dimensions of your own on this storey."
+          : `${props.ownCount} of your own on this storey.`}{" "}
+        Around the building, from the wall outward: openings, then rooms and wall thicknesses (
+        {style.measureTo === "faces" ? "to the wall faces" : "to the wall centrelines"}), then the
+        overall length. A slanted wall is measured as seen from that side; place your own dimension
+        for its true length. Dimensions are sized for 1:{style.screenScale} on screen and for the
+        chosen scale when exported.
       </p>
     </section>
   );

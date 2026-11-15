@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { AreaConfig } from "../core/areas.ts";
 import { sortedStoreys } from "../core/building.ts";
 import { writeDxf } from "../core/exportDxf.ts";
+import type { DimensionStyle } from "../core/dimensions.ts";
 import { buildSchedule } from "../core/exportSchedule.ts";
 import type { Project } from "../core/model.ts";
 import { type ExportConfig, buildSheets, sheetsThatDoNotFit } from "../core/sheets.ts";
@@ -27,6 +28,7 @@ export function ExportDialog(props: {
   areaConfig: AreaConfig;
   analysis: SiteAnalysis;
   config: ExportConfig;
+  dimensionStyle: DimensionStyle;
   /** Which storeys make up the footprint, in words. */
   footprintRule: string;
   /** The "to be verified" notes of the configs the figures depend on. */
@@ -63,8 +65,16 @@ export function ExportDialog(props: {
 
   const drawing = format !== "xlsx";
   const sheets = useMemo(
-    () => buildSheets(project, { storeyIds, includeSite, scale, siteScale }, areaConfig, analysis, config),
-    [project, storeyIds, includeSite, scale, siteScale, areaConfig, analysis, config],
+    () =>
+      buildSheets(
+        project,
+        { storeyIds, includeSite, scale, siteScale },
+        areaConfig,
+        analysis,
+        config,
+        props.dimensionStyle,
+      ),
+    [project, storeyIds, includeSite, scale, siteScale, areaConfig, analysis, config, props.dimensionStyle],
   );
   const tooLarge = format === "pdf" ? sheetsThatDoNotFit(sheets, config.paper[paper], config) : [];
   const ready = !busy && (!drawing || (sheets.length > 0 && tooLarge.length === 0));

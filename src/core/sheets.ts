@@ -5,7 +5,16 @@
  */
 import { type AreaConfig, formatArea } from "./areas.ts";
 import { sortedStoreys } from "./building.ts";
-import { type Bounds, type Drawing, type LayerKey, LAYER_KEYS, siteDrawing, storeyDrawing } from "./drawing.ts";
+import { type DimensionStyle, storeyDimensions } from "./dimensions.ts";
+import {
+  type Bounds,
+  type Drawing,
+  type LayerKey,
+  LAYER_KEYS,
+  addEntities,
+  siteDrawing,
+  storeyDrawing,
+} from "./drawing.ts";
 import type { Project } from "./model.ts";
 import type { SiteAnalysis } from "./site.ts";
 
@@ -100,7 +109,9 @@ export interface Sheet {
 /**
  * The drawings of an export: the site plan first (when asked for and a plot is
  * drawn), then one sheet per chosen storey from the lowest up. Lettering is
- * sized to be `textHeightMm` high on paper at each sheet's scale.
+ * sized to be `textHeightMm` high on paper at each sheet's scale. With a
+ * dimension style the storey plans carry their dimensions: the hand-placed
+ * ones, and the automatic ones the project has switched on.
  */
 export function buildSheets(
   project: Project,
@@ -108,6 +119,7 @@ export function buildSheets(
   areaConfig: AreaConfig,
   analysis: SiteAnalysis,
   config: ExportConfig,
+  dimensionStyle?: DimensionStyle,
 ): Sheet[] {
   const sheets: Sheet[] = [];
   const textHeight = (scale: number) => (config.textHeightMm * scale) / 1000;
@@ -133,7 +145,10 @@ export function buildSheets(
         kind: "storey",
         title: many ? `${building.name} · ${storey.name}` : storey.name,
         scale: selection.scale,
-        drawing: storeyDrawing(storey, areaConfig, textHeight(selection.scale)),
+        drawing: addEntities(
+          storeyDrawing(storey, areaConfig, textHeight(selection.scale)),
+          dimensionStyle ? storeyDimensions(storey, project.annotations, dimensionStyle, selection.scale) : [],
+        ),
         notes: [`Floor level ${storey.elevation >= 0 ? "+" : ""}${storey.elevation.toFixed(2)} m`],
       });
     }

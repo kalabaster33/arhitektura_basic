@@ -21,6 +21,7 @@ export function createStorey(name = "Ground floor", height = 3): Storey {
     spaces: [],
     apartments: [],
     circulation: [],
+    dimensions: [],
   };
 }
 
@@ -32,6 +33,7 @@ export function createProject(name = "Untitled project", snap = 0.05): Project {
     name,
     units: "m",
     grid: { snap },
+    annotations: { outsideDimensions: true, roomDimensions: true },
     site: {
       id: newId("site"),
       name: "Site",
@@ -113,6 +115,19 @@ const MIGRATIONS: Record<number, (data: any) => any> = {
       },
     };
   },
+  // Version 3 stores hand-placed dimensions per storey and which automatic ones are shown.
+  2: (data) => ({
+    ...data,
+    schemaVersion: 3,
+    annotations: { outsideDimensions: true, roomDimensions: true },
+    site: {
+      ...data.site,
+      buildings: (Array.isArray(data.site?.buildings) ? data.site.buildings : []).map((b: any) => ({
+        ...b,
+        storeys: (Array.isArray(b.storeys) ? b.storeys : []).map((s: any) => ({ ...s, dimensions: [] })),
+      })),
+    },
+  }),
 };
 
 /** Parses a saved project; throws a readable error when the file cannot be used. */
@@ -162,6 +177,11 @@ export function parseProject(json: string): Project {
           wallIds.has(o.wallId) &&
           [o.offset, o.width, o.height, o.sill].every(Number.isFinite),
       );
+      // A dimension that cannot be read is left out.
+      s.dimensions = (Array.isArray(s.dimensions) ? s.dimensions : []).filter(
+        (d: any) =>
+          typeof d?.id === "string" && [d.a?.x, d.a?.y, d.b?.x, d.b?.y, d.offset].every(Number.isFinite),
+      );
     }
   }
   // A plot that cannot be read is left out; the building is still worth opening.
@@ -180,5 +200,9 @@ export function parseProject(json: string): Project {
     maxFloorAreaRatio: limit(site.limits?.maxFloorAreaRatio),
   };
   if (!(data.grid?.snap > 0)) data.grid = { snap: 0.05 };
+  data.annotations = {
+    outsideDimensions: data.annotations?.outsideDimensions !== false,
+    roomDimensions: data.annotations?.roomDimensions !== false,
+  };
   return data as Project;
 }

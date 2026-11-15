@@ -294,7 +294,7 @@ describe("file format", () => {
     const { setbacks: _s, limits: _l, ...oldSite } = p.site;
     const v1 = JSON.stringify({ ...p, schemaVersion: 1, site: oldSite });
     const loaded = parseProject(v1);
-    expect(loaded.schemaVersion).toBe(2);
+    expect(loaded.schemaVersion).toBe(SCHEMA_VERSION);
     expect(loaded.site.boundary).toEqual([]);
     expect(loaded.site.setbacks).toEqual([]);
     expect(loaded.site.limits).toEqual({ maxCoverage: null, maxFloorAreaRatio: null });
