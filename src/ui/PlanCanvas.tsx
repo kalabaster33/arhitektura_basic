@@ -11,7 +11,7 @@ import {
   ownChain,
 } from "../core/dimensions.ts";
 import type { Entity } from "../core/drawing.ts";
-import { addWall, moveNode, moveWall } from "../core/edit.ts";
+import { addWall, addWallRun, moveNode, moveWall } from "../core/edit.ts";
 import {
   type Pt,
   dist,
@@ -22,6 +22,16 @@ import {
   snapPoint,
 } from "../core/geometry.ts";
 import { type MapSettings, tileZoomFor, tilesForPlan } from "../core/geo.ts";
+import {
+  type Shape,
+  type SnapGeometry,
+  type SnapResult,
+  type SnapSettings,
+  SNAP_LABEL,
+  findSnap,
+  shapeRing,
+  snapGeometry,
+} from "../core/osnap.ts";
 import type {
   CoreKind,
   GeoLocation,
@@ -98,6 +108,12 @@ interface Props {
   tool: Tool;
   selection: Selection;
   snapStep: number;
+  /** Object snap, grid snap and ortho, as in AutoCAD. */
+  snapSettings: SnapSettings;
+  /** What the wall tool and an outline being drawn make: a run of lines or a closed shape. */
+  shape: Shape;
+  /** How many sides a polygon has, and how many walls make a circle. */
+  shapeSides: { polygon: number; circle: number };
   wallThickness: number;
   wallKind: WallKind;
   /** Walls of the storey below, shown faintly for reference. */
@@ -251,6 +267,32 @@ function OpeningSymbol(props: {
   );
 }
 
+/** The AutoCAD-style marker of an object snap, with its name beside it. */
+function SnapMarker(props: { kind: Exclude<SnapResult["kind"], "grid" | "free">; at: Pt; px: number }) {
+  const { at, px } = props;
+  const s = 6 * px;
+  const shapes: Record<typeof props.kind, string> = {
+    endpoint: `M${-s} ${-s}H${s}V${s}H${-s}Z`,
+    midpoint: `M0 ${-s * 1.2}L${s * 1.1} ${s * 0.8}H${-s * 1.1}Z`,
+    center: "",
+    intersection: `M${-s} ${-s}L${s} ${s}M${s} ${-s}L${-s} ${s}`,
+    perpendicular: `M${-s} ${-s}V${s}H${s}M${-s} 0H0V${s}`,
+    nearest: `M${-s} ${-s}H${s}L${-s} ${s}H${s}Z`,
+  };
+  return (
+    <g transform={`translate(${at.x} ${at.y})`} className="osnap" pointerEvents="none">
+      {props.kind === "center" ? (
+        <circle r={s} strokeWidth={2 * px} />
+      ) : (
+        <path d={shapes[props.kind]} strokeWidth={2 * px} />
+      )}
+      <text x={s * 1.8} y={s * 2.6} fontSize={11 * px} strokeWidth={3 * px} className="osnap__label">
+        {SNAP_LABEL[props.kind]}
+      </text>
+    </g>
+  );
+}
+
 export function PlanCanvas(props: Props) {
   const { storey, faceBySpaceId, tool, selection, snapStep, onChange, onSelect } = props;
   const svgRef = useRef<SVGSVGElement>(null);
@@ -329,7 +371,7 @@ export function PlanCanvas(props: Props) {
     setPlotDraft([]);
     setPlotError(null);
     setDimDraft(null);
-  }, [tool]);
+  }, [tool, props.shape]);
 
   /** Closes the outline being drawn, or says why it cannot be a plot. */
   const finishPlot = (corners: Pt[]) => {
@@ -390,51 +432,67 @@ export function PlanCanvas(props: Props) {
     };
   };
 
-  /** Snap to a nearby wall end first, then to the grid. */
-  const snap = (p: Pt, walls = storey.walls, exclude?: Pt): Pt => {
-    let best: Pt | null = null;
-    let bestD = SNAP_PX / view.zoom;
-    for (const w of walls) {
-      for (const q of [w.a, w.b]) {
-        if (exclude && samePoint(q, exclude)) continue;
-        const d = dist(p, q);
-        if (d < bestD) {
-          bestD = d;
-          best = q;
-        }
-      }
+  /** Everything the pointer can snap to: walls, wall faces and jambs, the plot, the outline, the core and rooms. */
+  const snapGeo = useMemo<SnapGeometry>(() => {
+    const rings: Pt[][] = [];
+    if (plot.length >= 3) rings.push(plot);
+    if (footprint.length >= 3) rings.push(footprint);
+    for (const c of props.structure.core) {
+      const r = coreRect(c);
+      rings.push([r.min, { x: r.max.x, y: r.min.y }, r.max, { x: r.min.x, y: r.max.y }]);
     }
-    return best ?? snapPoint(p, snapStep);
-  };
+    const geo = snapGeometry(
+      storey.walls.map((w): [Pt, Pt] => [w.a, w.b]),
+      rings,
+      dimensionSnapPoints(storey),
+    );
+    for (const face of faceBySpaceId.values()) {
+      const ring = face.netOuter;
+      if (ring.length < 3) continue;
+      geo.centers.push({
+        x: ring.reduce((s, p) => s + p.x, 0) / ring.length,
+        y: ring.reduce((s, p) => s + p.y, 0) / ring.length,
+      });
+    }
+    return geo;
+  }, [storey.walls, storey.openings, plot, footprint, props.structure.core, faceBySpaceId]);
 
-  /** For the dimension tool: a nearby wall corner, opening jamb or wall end, else the grid. */
-  const snapPoints = useMemo(
-    () => (tool === "dimension" ? dimensionSnapPoints(storey) : []),
-    [tool, storey.walls, storey.openings],
-  );
-  const dimSnap = (p: Pt): Pt => {
-    let best: Pt | null = null;
-    let bestD = SNAP_PX / view.zoom;
-    for (const q of snapPoints) {
-      const d = dist(p, q);
-      if (d < bestD) {
-        bestD = d;
-        best = q;
-      }
+  /**
+   * Where a point lands: on something drawn (object snap), else on the grid.
+   * `from` is the last point placed, for ortho and perpendicular; Shift turns
+   * ortho the other way while it is held. `exclude` is a point being dragged,
+   * which must not snap to itself or to the edges that move with it.
+   */
+  const snapAt = (p: Pt, from: Pt | null = null, shift = false, exclude?: Pt): SnapResult => {
+    const settings = shift ? { ...props.snapSettings, ortho: !props.snapSettings.ortho } : props.snapSettings;
+    let geo = snapGeo;
+    if (exclude) {
+      geo = {
+        segments: geo.segments.filter(([a, b]) => !samePoint(a, exclude) && !samePoint(b, exclude)),
+        points: geo.points.filter((q) => !samePoint(q, exclude)),
+        centers: geo.centers,
+      };
     }
-    return best ?? snapPoint(p, snapStep);
+    return findSnap(p, geo, settings, SNAP_PX / view.zoom, snapStep, from);
   };
+  /** Where the pointer snapped, kept for drawing its marker. */
+  const [mark, setMark] = useState<SnapResult | null>(null);
+  const snapMark = (r: SnapResult): Pt => {
+    setMark(r);
+    return r.pt;
+  };
+  const dimSnap = (p: Pt): Pt => snapAt(p, dimDraft?.a ?? null).pt;
   /** How far from its two points the dimension being placed would sit with the pointer at `p`. */
   const draftOffset = (a: Pt, b: Pt, p: Pt) => roundTo(offsetFromLine(a, b, p), snapStep);
 
-  /** While drawing, Shift keeps the new wall horizontal or vertical. */
-  const drawPoint = (e: React.PointerEvent): Pt => {
-    const p = snap(toModel(e));
-    if (!chainStart || !e.shiftKey) return p;
-    return Math.abs(p.x - chainStart.x) >= Math.abs(p.y - chainStart.y)
-      ? { x: p.x, y: chainStart.y }
-      : { x: chainStart.x, y: p.y };
-  };
+  /** The shape tools draw a closed shape from two clicks; "line" draws a run of walls. */
+  const shape: Shape = props.shape;
+  const shapeOf = (a: Pt, b: Pt) => shapeRing(shape, a, b, props.shapeSides);
+
+  /** While drawing, ortho (or Shift) keeps the new wall horizontal or vertical. */
+  const drawPoint = (e: React.PointerEvent): Pt =>
+    // Ortho would flatten a rectangle to a line, so it does not apply to its second corner.
+    snapMark(snapAt(toModel(e), shape === "rectangle" ? null : chainStart, e.shiftKey));
 
   /** The spot on the nearest wall where the door or window tool can place its opening. */
   const placeAt = (e: { clientX: number; clientY: number }, kind: OpeningKind | "entrance") => {
@@ -451,13 +509,9 @@ export function PlanCanvas(props: Props) {
     return offset === null ? null : { wallId: hit.wallId, offset };
   };
 
-  /** While an outline is drawn, Shift keeps the new edge horizontal or vertical. */
-  const outlinePoint = (e: React.PointerEvent): Pt => {
-    const p = snapPoint(toModel(e), snapStep);
-    const last = plotDraft[plotDraft.length - 1];
-    if (!last || !e.shiftKey) return p;
-    return Math.abs(p.x - last.x) >= Math.abs(p.y - last.y) ? { x: p.x, y: last.y } : { x: last.x, y: p.y };
-  };
+  /** While an outline is drawn, ortho (or Shift) keeps the new edge horizontal or vertical. */
+  const outlinePoint = (e: React.PointerEvent): Pt =>
+    snapMark(snapAt(toModel(e), shape === "rectangle" ? null : (plotDraft[plotDraft.length - 1] ?? null), e.shiftKey));
 
   const onBackgroundDown = (e: React.PointerEvent) => {
     const pans = tool === "select" || tool === "erker" || ((tool === "site" || tool === "outline") && !drawingPlot);
@@ -488,7 +542,7 @@ export function PlanCanvas(props: Props) {
       return;
     }
     if (coreTool) {
-      const start = snap(toModel(e));
+      const start = snapAt(toModel(e)).pt;
       svgRef.current!.setPointerCapture(e.pointerId);
       drag.current = { kind: "rect", core: coreTool, start };
       setRectDraft({ a: start, b: start });
@@ -497,6 +551,12 @@ export function PlanCanvas(props: Props) {
     if (tool === "site" || tool === "outline") {
       const p = outlinePoint(e);
       setPlotError(null);
+      if (shape !== "line") {
+        // Two clicks: a corner (or the centre), then the opposite corner (or a corner on the rim).
+        if (plotDraft.length === 0) setPlotDraft([p]);
+        else if (!samePoint(p, plotDraft[0])) finishPlot(shapeOf(plotDraft[0], p)!);
+        return;
+      }
       if (plotDraft.length >= 3 && dist(toModel(e), plotDraft[0]) <= SNAP_PX / view.zoom) {
         finishPlot(plotDraft);
       } else if (!plotDraft.some((q) => samePoint(q, p))) {
@@ -521,6 +581,14 @@ export function PlanCanvas(props: Props) {
     }
     if (tool !== "wall") return;
     const p = drawPoint(e);
+    if (shape !== "line") {
+      if (!chainStart) setChainStart(p);
+      else if (!samePoint(p, chainStart)) {
+        onChange(addWallRun(storey, shapeOf(chainStart, p)!, true, props.wallThickness, props.wallKind), true);
+        setChainStart(null);
+      }
+      return;
+    }
     if (!chainStart) {
       setChainStart(p);
     } else if (samePoint(p, chainStart)) {
@@ -538,24 +606,26 @@ export function PlanCanvas(props: Props) {
         tool === "wall"
           ? drawPoint(e)
           : tool === "dimension" && !dimDraft?.b
-            ? dimSnap(toModel(e))
+            ? snapMark(snapAt(toModel(e), dimDraft?.a ?? null, e.shiftKey))
             : coreTool
-              ? snap(toModel(e))
+              ? snapMark(snapAt(toModel(e)))
               : drawingPlot
                 ? outlinePoint(e)
                 : snapPoint(toModel(e), snapStep),
       );
+      if (tool !== "wall" && !drawingPlot && !coreTool && !(tool === "dimension" && !dimDraft?.b)) setMark(null);
       if (tool === "door" || tool === "window" || tool === "entrance") setPlacing(placeAt(e, tool));
       return;
     }
     if (d.kind === "rect") {
-      const b = snap(toModel(e));
+      const b = snapMark(snapAt(toModel(e)));
       setCursor(b);
       setRectDraft({ a: d.start, b });
       return;
     }
     if (d.kind === "footprintCorner") {
-      const to = snapPoint(toModel(e), snapStep);
+      const own = d.base.site.buildings.find((b) => b.id === props.buildingId)!.structure.footprint[d.index];
+      const to = snapMark(snapAt(toModel(e), null, false, own));
       setCursor(to);
       if (samePoint(to, d.last, 1e-9)) return;
       const next = moveFootprintCorner(d.base, props.buildingId, d.index, to);
@@ -574,7 +644,7 @@ export function PlanCanvas(props: Props) {
       return;
     }
     if (d.kind === "corner") {
-      const to = snapPoint(toModel(e), snapStep);
+      const to = snapMark(snapAt(toModel(e), null, false, d.base.site.boundary[d.index]));
       setCursor(to);
       if (samePoint(to, d.last, 1e-9)) return;
       const next = moveBoundaryCorner(d.base, d.index, to);
@@ -595,7 +665,7 @@ export function PlanCanvas(props: Props) {
       return;
     }
     if (d.kind === "node") {
-      const to = snap(toModel(e), d.base.walls, d.from);
+      const to = snapMark(snapAt(toModel(e), null, false, d.from));
       setCursor(to);
       if (samePoint(to, d.last, 1e-9)) return;
       d.last = to;
@@ -631,8 +701,9 @@ export function PlanCanvas(props: Props) {
       svgRef.current!.releasePointerCapture(e.pointerId);
     }
     if (d?.kind === "pan" && !d.moved && e.button === 0) onSelect(null);
+    setMark(null);
     if (d?.kind === "rect") {
-      const b = snap(toModel(e));
+      const b = snapAt(toModel(e)).pt;
       setRectDraft(null);
       props.onCoreDrawn(d.core, d.start, b);
     }
@@ -734,7 +805,19 @@ export function PlanCanvas(props: Props) {
       settings.tileUrl,
     );
   }, [props.map, props.north, view, size]);
-  const draftRing = drawingPlot && plotDraft.length > 0 ? [...plotDraft, ...(cursor ? [cursor] : [])] : [];
+  /** A rectangle, polygon or circle being drawn as an outline, closed. */
+  const draftShape =
+    drawingPlot && shape !== "line" && plotDraft.length === 1 && cursor && !samePoint(cursor, plotDraft[0])
+      ? shapeOf(plotDraft[0], cursor)
+      : null;
+  const draftRing = draftShape
+    ? draftShape
+    : drawingPlot && plotDraft.length > 0
+      ? [...plotDraft, ...(cursor ? [cursor] : [])]
+      : [];
+  /** Walls of a rectangle, polygon or circle being drawn with the wall tool. */
+  const shapePreview =
+    preview && shape !== "line" && !samePoint(preview.a, preview.b) ? shapeOf(preview.a, preview.b) : null;
   const draftRect = rectDraft && coreRect(rectDraft);
   const siteTool = tool === "site";
   const dimScale = props.dimensionStyle.screenScale;
@@ -763,6 +846,7 @@ export function PlanCanvas(props: Props) {
       onPointerLeave={() => {
         if (drag.current) return;
         setCursor(null);
+        setMark(null);
         setPlacing(null);
       }}
       onContextMenu={(e) => {
@@ -1168,7 +1252,7 @@ export function PlanCanvas(props: Props) {
           <g pointerEvents="none">
             {draftRing.length >= 3 && <path d={ringPath(draftRing)} className="draft-fill" />}
             <path
-              d={`M${draftRing.map((p) => `${p.x},${p.y}`).join("L")}`}
+              d={`M${draftRing.map((p) => `${p.x},${p.y}`).join("L")}${draftShape ? "Z" : ""}`}
               className={`site__plot site__plot--draft${tool === "outline" ? " is-building" : ""}`}
               strokeWidth={2 * px}
             />
@@ -1269,7 +1353,39 @@ export function PlanCanvas(props: Props) {
           />
         )}
 
-        {preview && (
+        {shapePreview && preview && (
+          <>
+            <path
+              d={`${ringPath(shapePreview)}`}
+              strokeWidth={Math.max(props.wallThickness, 2 * px)}
+              strokeLinejoin="miter"
+              className="wall wall--preview wall--shape"
+              pointerEvents="none"
+            />
+            <line
+              x1={preview.a.x}
+              y1={preview.a.y}
+              x2={preview.b.x}
+              y2={preview.b.y}
+              strokeWidth={px}
+              strokeDasharray={`${4 * px} ${3 * px}`}
+              className="dim__draft"
+              pointerEvents="none"
+            />
+            <text
+              x={(preview.a.x + preview.b.x) / 2}
+              y={(preview.a.y + preview.b.y) / 2 - 10 * px}
+              fontSize={12 * px}
+              className="dimension"
+              pointerEvents="none"
+            >
+              {shape === "rectangle"
+                ? `${Math.abs(preview.b.x - preview.a.x).toFixed(2)} × ${Math.abs(preview.b.y - preview.a.y).toFixed(2)} m`
+                : `R ${dist(preview.a, preview.b).toFixed(2)} m`}
+            </text>
+          </>
+        )}
+        {preview && !shapePreview && shape === "line" && (
           <>
             <line
               x1={preview.a.x}
@@ -1292,8 +1408,13 @@ export function PlanCanvas(props: Props) {
             </text>
           </>
         )}
-        {(tool === "wall" || drawingPlot || coreTool || (tool === "dimension" && !dimDraft?.b)) && cursor && (
-          <circle cx={cursor.x} cy={cursor.y} r={4 * px} strokeWidth={1.5 * px} className="snap-dot" pointerEvents="none" />
+        {mark && cursor && mark.kind !== "grid" && mark.kind !== "free" ? (
+          <SnapMarker kind={mark.kind} at={mark.pt} px={px} />
+        ) : (
+          (tool === "wall" || drawingPlot || coreTool || (tool === "dimension" && !dimDraft?.b)) &&
+          cursor && (
+            <circle cx={cursor.x} cy={cursor.y} r={4 * px} strokeWidth={1.5 * px} className="snap-dot" pointerEvents="none" />
+          )
         )}
       </g>
 

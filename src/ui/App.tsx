@@ -41,6 +41,7 @@ import { deleteWall } from "../core/edit.ts";
 import { parseMapSettings } from "../core/geo.ts";
 import type { Project, Stage, Storey, WallKind } from "../core/model.ts";
 import { deleteOpening } from "../core/openings.ts";
+import { DEFAULT_SNAP, SHAPES, SNAP_LABEL, SNAP_MODES, type Shape, type SnapSettings } from "../core/osnap.ts";
 import {
   createProject,
   getActiveStorey,
@@ -119,6 +120,27 @@ const APARTMENT_COLORS = [
   "#4f5fc4",
 ];
 
+const SHAPE_LABEL: Record<Shape, { label: string; title: string }> = {
+  line: { label: "Line", title: "Click point after point" },
+  rectangle: { label: "Rectangle", title: "Click two opposite corners" },
+  polygon: { label: "Polygon", title: "Click the centre, then a corner" },
+  circle: { label: "Circle", title: "Click the centre, then a point on the rim" },
+};
+
+const SNAP_STORAGE_KEY = "arhitektura.snap";
+
+/** Snap settings as last left in this browser, else the defaults. */
+function loadSnap(): SnapSettings {
+  try {
+    const raw = localStorage.getItem(SNAP_STORAGE_KEY);
+    if (!raw) return DEFAULT_SNAP;
+    const saved = JSON.parse(raw) as Partial<SnapSettings>;
+    return { ...DEFAULT_SNAP, ...saved, modes: { ...DEFAULT_SNAP.modes, ...saved.modes } };
+  } catch {
+    return DEFAULT_SNAP;
+  }
+}
+
 interface ToolButton {
   tool: Tool;
   label: string;
@@ -151,7 +173,7 @@ const STAGE_TOOLS: Record<Stage, ToolButton[]> = {
 const STATUS: Record<Tool, string> = {
   select:
     "Drag a wall, its end points, a door or a window · drag empty space to pan · wheel to zoom · Delete removes the selection",
-  wall: "Click to place wall ends · Shift keeps it straight · Esc or right-click ends the run",
+  wall: "Click to place wall ends · F8 ortho, Shift flips it · F3 object snap · Esc or right-click ends the run",
   door: "Move over a wall and click to place a door · it snaps to where it fits",
   window: "Move over a wall and click to place a window · it snaps to where it fits",
   dimension:
@@ -192,6 +214,17 @@ export function App() {
   const hasOutline = structure.footprint.length >= 3;
   const status = useMemo(() => structureStatus(project), [project]);
   const [thickness, setThickness] = useState(editorDefaults.wallThickness);
+  const [shape, setShape] = useState<Shape>("line");
+  const [polygonSides, setPolygonSides] = useState(editorDefaults.polygonSides);
+  const [snapSettings, setSnapSettings] = useState<SnapSettings>(loadSnap);
+  useEffect(() => {
+    try {
+      localStorage.setItem(SNAP_STORAGE_KEY, JSON.stringify(snapSettings));
+    } catch {
+      // Not kept in a private window: the settings still work for this visit.
+    }
+  }, [snapSettings]);
+  const toggleSnap = (key: "osnap" | "grid" | "ortho") => setSnapSettings((s) => ({ ...s, [key]: !s[key] }));
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -372,10 +405,17 @@ export function App() {
   };
 
   // Latest values for the keyboard handler, which is attached once.
-  const live = useRef({ store, storey, selection, setStorey, project, setProject, exporting, tools, chooseTool, pickingLocation });
-  live.current = { store, storey, selection, setStorey, project, setProject, exporting, tools, chooseTool, pickingLocation };
+  const live = useRef({ store, storey, selection, setStorey, project, setProject, exporting, tools, chooseTool, pickingLocation, toggleSnap });
+  live.current = { store, storey, selection, setStorey, project, setProject, exporting, tools, chooseTool, pickingLocation, toggleSnap };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // AutoCAD's keys: F3 object snap, F8 ortho, F9 grid snap.
+      const fkey = ({ F3: "osnap", F8: "ortho", F9: "grid" } as const)[e.key as "F3" | "F8" | "F9"];
+      if (fkey) {
+        e.preventDefault();
+        live.current.toggleSnap(fkey);
+        return;
+      }
       const target = e.target as HTMLElement;
       if (["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName)) return;
       const { store, storey, selection, setStorey, project, setProject, exporting, tools, chooseTool, pickingLocation } =
@@ -420,6 +460,9 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  /** The tools that draw with the shape buttons: walls, and the plot or outline before it exists. */
+  const drawsShapes = tool === "wall" || (tool === "site" && !hasPlot) || (tool === "outline" && !hasOutline);
 
   const save = () => {
     download(`${fileBase(project.name)}.arh.json`, serializeProject(project), "application/json");
@@ -492,6 +535,36 @@ export function App() {
             </div>
           </>
         )}
+        {drawsShapes && (
+          <div className="group" role="group" aria-label="Shape">
+            {SHAPES.map((s) => (
+              <button
+                key={s}
+                className={shape === s ? "is-active" : ""}
+                onClick={() => setShape(s)}
+                title={SHAPE_LABEL[s].title}
+              >
+                {SHAPE_LABEL[s].label}
+              </button>
+            ))}
+          </div>
+        )}
+        {drawsShapes && shape === "polygon" && (
+          <label className="inline">
+            Sides
+            <input
+              type="number"
+              className="sides-input"
+              min={3}
+              max={64}
+              value={polygonSides}
+              onChange={(e) => {
+                const v = Math.round(Number(e.target.value));
+                if (v >= 3 && v <= 64) setPolygonSides(v);
+              }}
+            />
+          </label>
+        )}
         <div className="inline-field">
           <LengthField
             label="Snap"
@@ -500,6 +573,46 @@ export function App() {
             onCommit={(v) => store.set({ ...project, grid: { snap: v } }, false)}
           />
         </div>
+        <div className="group snap-toggles" role="group" aria-label="Drawing aids">
+          <button
+            className={snapSettings.osnap ? "is-active" : ""}
+            onClick={() => toggleSnap("osnap")}
+            title="Object snap: ends, middles, centres, crossings, perpendiculars (F3)"
+          >
+            OSNAP
+          </button>
+          <button
+            className={snapSettings.ortho ? "is-active" : ""}
+            onClick={() => toggleSnap("ortho")}
+            title="Ortho: keep new lines horizontal or vertical (F8) · Shift flips it while held"
+          >
+            ORTHO
+          </button>
+          <button
+            className={snapSettings.grid ? "is-active" : ""}
+            onClick={() => toggleSnap("grid")}
+            title="Grid snap (F9)"
+          >
+            GRID
+          </button>
+        </div>
+        <details className="snap-modes">
+          <summary title="Choose which object snaps are on">Snaps ▾</summary>
+          <div className="snap-modes__menu">
+            {SNAP_MODES.map((m) => (
+              <label key={m}>
+                <input
+                  type="checkbox"
+                  checked={snapSettings.modes[m]}
+                  onChange={(e) =>
+                    setSnapSettings((s) => ({ ...s, modes: { ...s.modes, [m]: e.target.checked } }))
+                  }
+                />
+                {SNAP_LABEL[m]}
+              </label>
+            ))}
+          </div>
+        </details>
         <span className="spacer" />
         <div className="group">
           <button onClick={store.undo} disabled={!store.canUndo} title="Undo (Ctrl+Z)">
@@ -602,6 +715,9 @@ export function App() {
             tool={tool}
             selection={selection}
             snapStep={project.grid.snap}
+            snapSettings={snapSettings}
+            shape={drawsShapes ? shape : "line"}
+            shapeSides={{ polygon: polygonSides, circle: editorDefaults.circleSegments }}
             wallThickness={thickness[wallKind]}
             wallKind={wallKind}
             underlay={below?.walls ?? []}

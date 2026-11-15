@@ -95,6 +95,30 @@ export function addWall(
   return finish(storey, [...storey.walls, { id: newId("wall"), a, b, thickness, kind }]);
 }
 
+/**
+ * Walls along a run of points in one go (one undo step): a rectangle, a
+ * polygon or a circle drawn as many short walls. `closed` joins the last
+ * point back to the first.
+ */
+export function addWallRun(
+  storey: Storey,
+  points: Pt[],
+  closed: boolean,
+  thickness: number,
+  kind: WallKind = "interior",
+): Storey {
+  if (!(thickness > 0)) return storey;
+  const added: Wall[] = [];
+  const n = points.length;
+  for (let i = 0; i < (closed ? n : n - 1); i++) {
+    const a = points[i];
+    const b = points[(i + 1) % n];
+    if (dist(a, b) <= NODE_TOL) continue;
+    added.push({ id: newId("wall"), a, b, thickness, kind });
+  }
+  return added.length ? finish(storey, [...storey.walls, ...added]) : storey;
+}
+
 export function deleteWall(storey: Storey, id: string): Storey {
   return finish(storey, storey.walls.filter((w) => w.id !== id));
 }
