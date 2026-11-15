@@ -31,6 +31,10 @@ export interface OpeningSize {
 }
 
 /** Stretches of a wall, as distances from its `a` end, where an opening may sit. */
+export function wallFreeSpans(storey: Storey, wall: Wall): [number, number][] {
+  return freeSpans(storey.walls, storey.openings, wall);
+}
+
 function freeSpans(
   walls: Wall[],
   openings: Opening[],

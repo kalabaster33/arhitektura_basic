@@ -1,0 +1,15 @@
+{
+  "_status": "TO BE VERIFIED BY A LICENSED ENGINEER. These sizes and ratios are neutral placeholders, not taken from any standard or building code. Check them against the daylight and ventilation rules that apply to the project.",
+  "_doc": "Automatic windows. glazingRatio: wanted window area as a share of the room's floor area (to wall centrelines); a room gets as many windows of its type's size as that needs, at least one, at most `max`. jambClearance: wall left between a window and a wall that joins the facade. pier: least wall between two windows. minWidth: a window may be narrowed down to this to fit a short facade. types: room types that get windows, with the window size for each; other room types get none.",
+  "glazingRatio": 0.125,
+  "jambClearance": 0.3,
+  "pier": 0.6,
+  "minWidth": 0.6,
+  "types": {
+    "living": { "width": 1.8, "height": 1.5, "sill": 0.9, "max": 3 },
+    "bedroom": { "width": 1.2, "height": 1.4, "sill": 0.9, "max": 2 },
+    "kitchen": { "width": 1.2, "height": 1.2, "sill": 1.1, "max": 1 },
+    "room": { "width": 1.2, "height": 1.4, "sill": 0.9, "max": 2 },
+    "bathroom": { "width": 0.6, "height": 0.6, "sill": 1.6, "max": 1 }
+  }
+}

@@ -489,6 +489,9 @@ export function ApartmentsPanel(props: {
   onGenerateAll: () => void;
   /** Progress of a run over all apartments, or null. */
   generatingAll: string | null;
+  /** Generated layouts also get windows in the facade walls. */
+  autoWindows: boolean;
+  onAutoWindows: (on: boolean) => void;
   selection: Selection;
   onChange: (s: Storey, record?: boolean) => void;
   onSelect: (s: Selection) => void;
@@ -586,6 +589,12 @@ export function ApartmentsPanel(props: {
         </div>
       )}
       {props.layoutError?.apartmentId === "" && <p className="hint is-bad">{props.layoutError.reason}</p>}
+      {storey.apartments.length > 0 && (
+        <label className="check" title="Window sizes and counts: src/config/windowRules.json (to be verified by a licensed engineer)">
+          <input type="checkbox" checked={props.autoWindows} onChange={(e) => props.onAutoWindows(e.target.checked)} />
+          Generated rooms get windows in the facade walls
+        </label>
+      )}
       <button
         onClick={() => onChange(createApartment(storey, selectedRoom ? [selectedRoom.id] : []).storey)}
       >
@@ -598,8 +607,9 @@ export function ApartmentsPanel(props: {
       <p className="hint">
         Generate layout divides an apartment into the rooms set under it — bedrooms, bathrooms,
         WC, storage and the kitchen — plus a living room and a corridor where needed, and shows up
-        to three options to choose from. It needs an entrance door and an exterior wall, and does
-        not add windows.
+        to three options to choose from. It needs an entrance door and an exterior wall. With the
+        box above ticked, each room that needs daylight gets windows in its facade walls, replacing
+        the apartment's old ones.
       </p>
       <p className="hint hint--warn">
         Room sizes for generated layouts are placeholders — to be verified by a licensed engineer
@@ -613,8 +623,11 @@ export function PlanChecksPanel(props: {
   storey: Storey;
   issues: PlanIssue[];
   onOpen: (issue: PlanIssue) => void;
+  /** Puts windows in the facade walls of the rooms without daylight; absent while previewing. */
+  onAddWindows?: () => void;
 }) {
   const { issues } = props;
+  const dark = issues.filter((i) => i.kind === "roomNoDaylight").length;
   return (
     <section className="panel">
       <h2>
@@ -637,6 +650,11 @@ export function PlanChecksPanel(props: {
             </li>
           ))}
         </ul>
+      )}
+      {dark > 0 && props.onAddWindows && (
+        <button onClick={props.onAddWindows} title="Window sizes and counts: src/config/windowRules.json">
+          Add windows to {dark} room{dark > 1 ? "s" : ""} without daylight
+        </button>
       )}
       <p className="hint">
         Checked on this storey: a door for every room, a window in an exterior wall for rooms that

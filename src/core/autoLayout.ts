@@ -33,6 +33,7 @@ import {
 } from "./geometry.ts";
 import type { SpaceType, Storey, Wall } from "./model.ts";
 import { type OpeningSize, addOpening, locateOnWall, openingSides } from "./openings.ts";
+import { type WindowRules, placeWindows, removeRoomWindows } from "./windows.ts";
 import { type LinkedSpaces, linkSpaces } from "./spaces.ts";
 
 export type LayoutRules = Partial<SubdivisionOptions>;
@@ -191,6 +192,11 @@ export interface ApplyOptions {
   door: OpeningSize;
   /** Grid step; partitions of a square-set apartment are put on it. */
   snap: number;
+  /**
+   * When given, the apartment's windows in exterior walls are replaced by new
+   * ones placed by these rules, room by room.
+   */
+  windows?: WindowRules;
 }
 
 const ROOM_LABEL: Record<RoomType, { name: string; type: SpaceType }> = {
@@ -455,9 +461,15 @@ export function proposeLayouts(
     return { ok: false, reason: e instanceof Error ? e.message : String(e) };
   }
   const proposals: LayoutProposal[] = [];
+  // The old windows would block or straddle the new partitions.
+  const shell = options.windows ? removeRoomWindows(built.shell, [built.spaceId]) : built.shell;
   for (const layout of layouts) {
-    const applied = applyLayout(built.shell, apartmentId, built.input, layout, options);
+    let applied = applyLayout(shell, apartmentId, built.input, layout, options);
     if (!applied) continue;
+    if (options.windows) {
+      const spaceIds = applied.apartments.find((a) => a.id === apartmentId)!.spaceIds;
+      applied = placeWindows(applied, options.windows, { spaceIds });
+    }
     const apartment = applied.apartments.find((a) => a.id === apartmentId)!;
     proposals.push({
       storey: applied,

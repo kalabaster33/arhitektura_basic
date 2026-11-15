@@ -10,6 +10,8 @@ import mapSettingsJson from "../config/mapSettings.json";
 import roomChecks from "../config/roomChecks.json";
 import siteRulesJson from "../config/siteRules.json";
 import storeySplitJson from "../config/storeySplit.json";
+import windowRulesJson from "../config/windowRules.json";
+import { parseWindowRules, placeWindows } from "../core/windows.ts";
 import { parseAnnotationStyle, storeyAnnotations } from "../core/annotations.ts";
 import { describeApartments } from "../core/apartments.ts";
 import {
@@ -106,6 +108,15 @@ const dimensionStyle = parseDimensionStyle(dimensionStyleJson);
 const annotationStyle = parseAnnotationStyle(annotationStyleJson);
 const mapSettings = parseMapSettings(mapSettingsJson);
 const splitRules = parseSplitRules(storeySplitJson);
+const windowRules = parseWindowRules(windowRulesJson);
+const WINDOWS_KEY = "arhitektura.autoWindows";
+function loadAutoWindows(): boolean {
+  try {
+    return localStorage.getItem(WINDOWS_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
 /** Printed on the Notes sheet of an exported schedule. */
 const exportNotes = [areaDefinitions._status, siteRulesJson._status];
 
@@ -234,6 +245,7 @@ export function App() {
   const [splitBusy, setSplitBusy] = useState(false);
   const [splitError, setSplitError] = useState<string | null>(null);
   const [generatingAll, setGeneratingAll] = useState<string | null>(null);
+  const [autoWindows, setAutoWindows] = useState(loadAutoWindows);
   const [layoutError, setLayoutError] = useState<{ apartmentId: string; reason: string } | null>(null);
   const previewing = preview !== null && preview.storeyId === realStorey.id;
   // While a generated layout is previewed, the whole screen shows the storey
@@ -418,6 +430,20 @@ export function App() {
     partitionThickness: thickness.interior,
     door: editorDefaults.openings.door,
     snap: project.grid.snap,
+    windows: autoWindows ? windowRules : undefined,
+  };
+  const changeAutoWindows = (on: boolean) => {
+    setAutoWindows(on);
+    try {
+      localStorage.setItem(WINDOWS_KEY, on ? "1" : "0");
+    } catch {
+      // Remembering the choice is a convenience only.
+    }
+  };
+  /** Windows for the rooms of this storey that need daylight and have none. */
+  const addMissingWindows = () => {
+    const ids = storeyPlanIssues.filter((i) => i.kind === "roomNoDaylight").map((i) => i.spaceId!);
+    setStorey(placeWindows(realStorey, windowRules, { spaceIds: ids }));
   };
 
   const generateLayout = (apartmentId: string) => {
@@ -1019,6 +1045,7 @@ export function App() {
               <PlanChecksPanel
                 storey={storey}
                 issues={storeyPlanIssues}
+                onAddWindows={previewing ? undefined : addMissingWindows}
                 onOpen={(issue) => issue.spaceId && setSelection({ kind: "space", id: issue.spaceId })}
               />
               <DimensionsPanel
@@ -1040,6 +1067,8 @@ export function App() {
                 onGenerate={generateLayout}
                 onGenerateAll={generateAll}
                 generatingAll={generatingAll}
+                autoWindows={autoWindows}
+                onAutoWindows={changeAutoWindows}
                 selection={selection}
                 onChange={(s, record) => setStorey(s, record)}
                 onSelect={setSelection}
