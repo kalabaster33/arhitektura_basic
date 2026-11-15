@@ -607,7 +607,9 @@ export function ApartmentsPanel(props: {
       <p className="hint">
         Generate layout divides an apartment into the rooms set under it — bedrooms, bathrooms,
         WC, storage and the kitchen — plus a living room and a corridor where needed, and shows up
-        to three options to choose from. It needs an entrance door and an exterior wall. With the
+        to three options to choose from. It works to the room sizes, adjacency and walking rules in
+        src/config/layoutRules.json, and the preview lists which each option meets. It needs an
+        entrance door and an exterior wall. With the
         box above ticked, each room that needs daylight gets windows in its facade walls, replacing
         the apartment's old ones.
       </p>

@@ -1,11 +1,45 @@
 {
-  "_status": "TO BE VERIFIED BY A LICENSED ENGINEER. These sizes and shares are neutral starting values for the layout generator, not taken from any standard or building code. Check them against the rules that apply to the project.",
-  "_doc": "Rules the layout generator works to when it divides an apartment into a living room, a bedroom, a bathroom and, where needed, a corridor. Lengths in metres, areas in square metres, measured to the centrelines of the new partitions and the inside faces of the apartment's surrounding walls. minLivingWidth / minBedroomSide: narrowest acceptable dimension. maxBedroomAspect / maxBathroomAspect: longest side divided by shortest. corridorWidth: clear corridor width. minCorridorArea: leftovers smaller than this are merged into a neighbouring room. doorWidth: width of the doors it places. entranceClearance: radius around the entrance kept free as circulation. minLivingFacade / minBedroomFacade: length of exterior wall the room must have. bedroomShare / bathroomShare: target area as a share of the apartment, kept within bedroomAreaRange / bathroomAreaRange. When an apartment is too tight, the generator scales the minimum widths and facade lengths down to 85 % and then 70 % and says so.",
-  "minLivingWidth": 2.5,
-  "minBedroomSide": 2.5,
+  "_status": "TO BE VERIFIED BY A LICENSED ENGINEER. These sizes, rules and weights are neutral starting values for the layout generator, not taken from any standard or building code (in North Macedonia see the Rulebook on housing norms and standards, Official Gazette 27/2010). Check them against the rules that apply to the project.",
+  "_doc": "Rules the layout generator works to when it divides an apartment into rooms. Lengths in metres, areas in square metres, measured to the centrelines of the new partitions and the inside faces of the apartment's surrounding walls. When an apartment is too tight, the generator scales the minimum widths, areas and facade lengths down to 85 % and then 70 % and says so; the rule report always measures against the full values.",
+
+  "_rooms": "Least net area and least clear width of each kind of room. mainBedroom is the first bedroom (a double bedroom), bedroom every further one. The kitchen line applies to a separate kitchen; an open kitchen is part of the living room.",
+  "rooms": {
+    "living": { "minArea": 14, "minWidth": 3.0 },
+    "mainBedroom": { "minArea": 12, "minWidth": 2.8 },
+    "bedroom": { "minArea": 8, "minWidth": 2.4 },
+    "kitchen": { "minArea": 6, "minWidth": 1.8 },
+    "bathroom": { "minArea": 3.5, "minWidth": 1.6 },
+    "wc": { "minArea": 1.2, "minWidth": 0.9 },
+    "storage": { "minArea": 1.0, "minWidth": 0.9 },
+    "corridor": { "minArea": 0, "minWidth": 1.0 }
+  },
+
+  "_adjacency": "How rooms relate. a / b: living, bedroom, kitchen, bathroom, wc, storage, corridor or entrance (the apartment's entrance door). rule: opensTo (every a has its door into a b), notOpensTo (no a has its door into a b), near (every a shares a wall with a b or lies within circulation.nearDistance of one; to the entrance: that far to walk), adjacent (every a shares a wall with a b), apart (no a shares a wall with a b). Bedrooms, bathrooms, WCs, storage and a separate kitchen always open into the living room or a corridor, never through each other. weight: how much breaking it costs against the other criteria (0.5 mild, 1 normal, 2-3 strong). hard: true drops every layout that breaks it. text: the rule as the report shows it.",
+  "adjacency": [
+    { "a": "kitchen", "b": "living", "rule": "opensTo", "weight": 1.0, "text": "The kitchen opens into the living room" },
+    { "a": "bathroom", "b": "living", "rule": "notOpensTo", "weight": 1.5, "text": "Bathrooms open off the hall, not the living room" },
+    { "a": "wc", "b": "living", "rule": "notOpensTo", "weight": 1.0, "text": "The WC opens off the hall, not the living room" },
+    { "a": "bedroom", "b": "living", "rule": "notOpensTo", "weight": 0.8, "text": "Bedrooms open off the hall, not the living room" },
+    { "a": "bathroom", "b": "bedroom", "rule": "near", "weight": 1.0, "text": "A bathroom near the bedrooms" },
+    { "a": "wc", "b": "entrance", "rule": "near", "weight": 1.0, "text": "The WC near the entrance" },
+    { "a": "storage", "b": "entrance", "rule": "near", "weight": 0.5, "text": "Storage near the entrance" },
+    { "a": "bathroom", "b": "wc", "rule": "near", "weight": 1.0, "text": "Wet rooms together, on one riser" },
+    { "a": "bathroom", "b": "bathroom", "rule": "near", "weight": 1.0, "text": "Bathrooms together, on one riser" },
+    { "a": "bedroom", "b": "kitchen", "rule": "apart", "weight": 0.5, "text": "No bedroom shares a wall with the kitchen" }
+  ],
+
+  "_circulation": "How easy the apartment is to walk through, measured from the entrance door through the living room and corridors to each room's door. walkWeight: cost of the average walk. maxWalk: longest acceptable walk to a room's door. nightZone: how strongly bedrooms are kept away from the entrance, deeper than the living room. maxCorridorShare: largest share of the apartment corridors should take. nearDistance: rooms closer than this count as near.",
+  "circulation": {
+    "walkWeight": 1.0,
+    "maxWalk": 12,
+    "nightZone": 0.75,
+    "maxCorridorShare": 0.15,
+    "nearDistance": 4.5
+  },
+
+  "_other": "maxBedroomAspect / maxBathroomAspect: longest side divided by shortest. minCorridorArea: leftovers smaller than this are merged into a neighbouring room. doorWidth: width of the doors it places. entranceClearance: radius around the entrance kept free as circulation. minLivingFacade / minBedroomFacade: length of exterior wall the room must have. bedroomShare / bathroomShare: target area of the first bedroom / bathroom as a share of the apartment, kept within bedroomAreaRange / bathroomAreaRange (and never below the room minimums above).",
   "maxBedroomAspect": 1.6,
   "maxBathroomAspect": 2.0,
-  "corridorWidth": 1.0,
   "minCorridorArea": 1.2,
   "doorWidth": 0.9,
   "entranceClearance": 1.1,

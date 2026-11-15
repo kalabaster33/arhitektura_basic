@@ -96,6 +96,8 @@ import {
 } from "./Sidebar.tsx";
 import { useProjectStore } from "./useProjectStore.ts";
 import { StoreyPlanPanel } from "./StoreyPlanPanel.tsx";
+import { RuleReport } from "./RuleReport.tsx";
+import type { RuleCheck } from "../roomSubdivision.ts";
 import { CorePanel, ErkerPanel, LocationPanel, OutlinePanel, Stepper } from "./WorkflowPanels.tsx";
 
 const areaConfig = parseAreaConfig(areaDefinitions);
@@ -125,7 +127,7 @@ interface PlanPreview {
   storeyId: string;
   /** "Layout" or "Storey plan". */
   title: string;
-  proposals: { storey: Storey; summary: string; note?: string }[];
+  proposals: { storey: Storey; summary: string; note?: string; checks?: RuleCheck[] }[];
   index: number;
   /** A storey plan that is also to be drawn on these storeys, with the same mix. */
   similar?: { units: UnitType[]; access: Access | "auto"; storeyIds: string[] };
@@ -473,6 +475,7 @@ export function App() {
         storey: q.storey,
         summary: `${apartment.name} · ${q.rooms.join(", ")}`,
         note: q.relaxation < 1 ? `tight: minimum sizes scaled to ${Math.round(q.relaxation * 100)} %` : undefined,
+        checks: q.checks,
       })),
       index: 0,
     });
@@ -866,6 +869,9 @@ export function App() {
                 {preview.similar &&
                   ` · also on ${preview.similar.storeyIds.length} more storey${preview.similar.storeyIds.length > 1 ? "s" : ""}`}
               </span>
+              {preview.proposals[preview.index].checks && (
+                <RuleReport checks={preview.proposals[preview.index].checks!} />
+              )}
               <span className="spacer" />
               {preview.proposals.length > 1 && (
                 <div className="group">

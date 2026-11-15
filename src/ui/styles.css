@@ -685,6 +685,73 @@ input.is-invalid {
   color: #2b3a55;
 }
 
+.rule-report {
+  position: relative;
+}
+
+.rule-report > summary {
+  cursor: pointer;
+  padding: 2px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--panel);
+  color: #1d6b35;
+  font-size: 13px;
+}
+
+.rule-report > summary.is-bad {
+  color: var(--danger);
+}
+
+.rule-report__body {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 2;
+  width: min(460px, calc(100vw - 48px));
+  max-height: 60vh;
+  overflow: auto;
+  padding: 8px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.15);
+}
+
+.rule-report__body h3 {
+  margin: 8px 0 4px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.rule-report__body ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rule-report__body li {
+  display: flex;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.rule-report__body li.is-ok > span:first-child {
+  color: #1d6b35;
+}
+
+.rule-report__body li.is-bad > span:first-child {
+  color: var(--danger);
+}
+
+.rule-report__body small {
+  color: var(--muted);
+}
+
 .apartments__layout {
   grid-column: 2 / -1;
   display: flex;

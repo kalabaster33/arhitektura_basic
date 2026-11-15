@@ -60,6 +60,66 @@ export function normalizeProgram(p: Partial<RoomProgram> | undefined): RoomProgr
   };
 }
 
+/** Room kinds the size rules are given for; the first bedroom is the main one. */
+export type SizedRoom = "living" | "mainBedroom" | "bedroom" | "kitchen" | "bathroom" | "wc" | "storage" | "corridor";
+export const SIZED_ROOMS: SizedRoom[] = ["living", "mainBedroom", "bedroom", "kitchen", "bathroom", "wc", "storage", "corridor"];
+
+export interface RoomSize {
+  /** Least net floor area, m2. */
+  minArea: number;
+  /** Least clear width, m. */
+  minWidth: number;
+}
+
+/** What a rule names: a kind of room, or the apartment's entrance door. */
+export type RuleRoom = "living" | "bedroom" | "kitchen" | "bathroom" | "wc" | "storage" | "corridor" | "entrance";
+export const RULE_ROOMS: RuleRoom[] = ["living", "bedroom", "kitchen", "bathroom", "wc", "storage", "corridor", "entrance"];
+
+/**
+ * opensTo: every room of kind `a` has its door into a room of kind `b`.
+ * notOpensTo: no room of kind `a` has its door into one of kind `b`.
+ * near: each room of kind `a` is close to one of kind `b` (shares a wall or
+ * lies within nearDistance; to the entrance: that far to walk).
+ * adjacent: each room of kind `a` shares a wall with one of kind `b`.
+ * apart: no room of kind `a` shares a wall with one of kind `b`.
+ */
+export type AdjacencyKind = "opensTo" | "notOpensTo" | "near" | "adjacent" | "apart";
+export const ADJACENCY_KINDS: AdjacencyKind[] = ["opensTo", "notOpensTo", "near", "adjacent", "apart"];
+
+export interface AdjacencyRule {
+  a: RuleRoom;
+  b: RuleRoom;
+  rule: AdjacencyKind;
+  /** Cost of breaking it, against the other soft criteria (about 0.5 to 3). */
+  weight: number;
+  /** A layout that breaks it is not offered at all. */
+  hard?: boolean;
+  /** The rule in words, as the report shows it. */
+  text: string;
+}
+
+export interface CirculationRules {
+  /** Cost of the average walk from the entrance to the room doors, per apartment diagonal. */
+  walkWeight: number;
+  /** Longest acceptable walk from the entrance door to a room's door, m. */
+  maxWalk: number;
+  /** Cost of bedrooms that lie close to the entrance instead of deeper in the plan. */
+  nightZone: number;
+  /** Largest share of the apartment that corridors should take. */
+  maxCorridorShare: number;
+  /** Rooms whose centres are this close count as near each other, m. */
+  nearDistance: number;
+}
+
+/** One line of a layout's rule report. */
+export interface RuleCheck {
+  group: "size" | "adjacency" | "circulation";
+  text: string;
+  ok: boolean;
+  /** What breaks it, or the measured value. */
+  detail?: string;
+}
+
 export interface ApartmentInput {
   /** Closed outline, without a repeated last vertex. Either winding. */
   polygon: Pt[];
@@ -81,16 +141,10 @@ export interface SubdivisionOptions {
   refineCellSize: number;
   /** Thickness of the partitions between rooms. 0 gives touching polygons. */
   wallThickness: number;
-  /** Narrowest acceptable living room dimension. */
-  minLivingWidth: number;
-  /** Narrowest acceptable bedroom side. */
-  minBedroomSide: number;
   /** Longest/shortest side limit for the bedroom. */
   maxBedroomAspect: number;
   /** Longest/shortest side limit for the bathroom. */
   maxBathroomAspect: number;
-  /** Clear corridor width. Narrower leftovers are merged into a neighbour. */
-  corridorWidth: number;
   /** Leftovers smaller than this never become a corridor of their own. */
   minCorridorArea: number;
   /** Shared wall length two rooms need before a door fits between them. */
@@ -125,17 +179,20 @@ export interface SubdivisionOptions {
   kitchenCounterDepth: number;
   /** Shortest / longest counter run. */
   kitchenLength: [number, number];
+  /** Least area and width per kind of room. */
+  roomSizes: Record<SizedRoom, RoomSize>;
+  /** Which rooms open into, lie near or keep away from which. */
+  adjacency: AdjacencyRule[];
+  /** How easy the apartment is to walk through. */
+  circulation: CirculationRules;
 }
 
 export const DEFAULT_OPTIONS: SubdivisionOptions = {
   cellSize: 0.25,
   refineCellSize: 0.05,
   wallThickness: 0.1,
-  minLivingWidth: 2.5,
-  minBedroomSide: 2.5,
   maxBedroomAspect: 1.6,
   maxBathroomAspect: 2.0,
-  corridorWidth: 1.0,
   minCorridorArea: 1.2,
   doorWidth: 0.9,
   entranceClearance: 1.1,
@@ -158,6 +215,29 @@ export const DEFAULT_OPTIONS: SubdivisionOptions = {
   kitchenDepth: 1.8,
   kitchenCounterDepth: 0.6,
   kitchenLength: [2.4, 3.6],
+  roomSizes: {
+    living: { minArea: 14, minWidth: 3.0 },
+    mainBedroom: { minArea: 12, minWidth: 2.8 },
+    bedroom: { minArea: 8, minWidth: 2.4 },
+    kitchen: { minArea: 6, minWidth: 1.8 },
+    bathroom: { minArea: 3.5, minWidth: 1.6 },
+    wc: { minArea: 1.2, minWidth: 0.9 },
+    storage: { minArea: 1.0, minWidth: 0.9 },
+    corridor: { minArea: 0, minWidth: 1.0 },
+  },
+  adjacency: [
+    { a: "kitchen", b: "living", rule: "opensTo", weight: 1.0, text: "The kitchen opens into the living room" },
+    { a: "bathroom", b: "living", rule: "notOpensTo", weight: 1.5, text: "Bathrooms open off the hall, not the living room" },
+    { a: "wc", b: "living", rule: "notOpensTo", weight: 1.0, text: "The WC opens off the hall, not the living room" },
+    { a: "bedroom", b: "living", rule: "notOpensTo", weight: 0.8, text: "Bedrooms open off the hall, not the living room" },
+    { a: "bathroom", b: "bedroom", rule: "near", weight: 1.0, text: "A bathroom near the bedrooms" },
+    { a: "wc", b: "entrance", rule: "near", weight: 1.0, text: "The WC near the entrance" },
+    { a: "storage", b: "entrance", rule: "near", weight: 0.5, text: "Storage near the entrance" },
+    { a: "bathroom", b: "wc", rule: "near", weight: 1.0, text: "Wet rooms together, on one riser" },
+    { a: "bathroom", b: "bathroom", rule: "near", weight: 1.0, text: "Bathrooms together, on one riser" },
+    { a: "bedroom", b: "kitchen", rule: "apart", weight: 0.5, text: "No bedroom shares a wall with the kitchen" },
+  ],
+  circulation: { walkWeight: 1.0, maxWalk: 12, nightZone: 0.75, maxCorridorShare: 0.15, nearDistance: 4.5 },
 };
 
 export interface Room {
@@ -206,6 +286,8 @@ export interface Layout {
   cost: number;
   /** 1 = all default minimums held; lower = minimums were scaled by this. */
   relaxation: number;
+  /** How the layout fares against each size, adjacency and circulation rule. */
+  checks: RuleCheck[];
 }
 
 /** Best layout, or an error when the outline cannot hold the programme. */
@@ -649,6 +731,8 @@ interface Private {
   spec: RoomSpec;
   /** Rooms with the same group share one candidate list. */
   group: number;
+  /** Which size rule applies. */
+  size: SizedRoom;
 }
 
 interface Params {
@@ -674,40 +758,56 @@ function deriveParams(g: Grid, opts: SubdivisionOptions, relax: number): Params 
   const prog = opts.program;
   const shrink = relax < 1 ? relax : 1;
 
+  const sizeOf = (kind: PrivateKind, first: boolean): SizedRoom =>
+    kind === "bedroom" ? (first ? "mainBedroom" : "bedroom") : kind;
+  // The size rules are minimums: a room is never planned smaller or narrower,
+  // except that a tight apartment scales them like the other minimums.
   const specFor = (kind: PrivateKind, target: number, first: boolean): RoomSpec => {
-    switch (kind) {
-      case "bedroom":
-        return {
-          minSide: opts.minBedroomSide * relax,
-          maxSide: 5.5,
-          minArea: 0.8 * target,
-          maxArea: 1.25 * target,
-          maxAspect: opts.maxBedroomAspect,
-          minFacade: opts.minBedroomFacade * relax,
-        };
-      case "bathroom":
-        return {
-          minSide: first ? 1.5 : 1.4,
-          maxSide: 3.0,
-          minArea: Math.max(first ? 3 : 2.6, 0.8 * target),
-          maxArea: 1.4 * target,
-          maxAspect: opts.maxBathroomAspect,
-          minFacade: 0,
-        };
-      case "wc":
-        return { minSide: 1.0, maxSide: 2.2, minArea: 0.75 * target, maxArea: 1.5 * target, maxAspect: 2.5, minFacade: 0 };
-      case "kitchen":
-        return {
-          minSide: 2.0 * relax,
-          maxSide: 4.5,
-          minArea: 0.8 * target,
-          maxArea: 1.4 * target,
-          maxAspect: 2.2,
-          minFacade: opts.minKitchenFacade * relax,
-        };
-      case "storage":
-        return { minSide: 1.0, maxSide: 2.5, minArea: 0.6 * target, maxArea: 1.5 * target, maxAspect: 2.5, minFacade: 0 };
-    }
+    const rule = opts.roomSizes[sizeOf(kind, first)];
+    const base = ((): RoomSpec => {
+      switch (kind) {
+        case "bedroom":
+          return {
+            minSide: 0, // from the size rules
+            maxSide: 5.5,
+            minArea: 0.8 * target,
+            maxArea: 1.25 * target,
+            maxAspect: opts.maxBedroomAspect,
+            minFacade: opts.minBedroomFacade * relax,
+          };
+        case "bathroom":
+          return {
+            minSide: first ? 1.5 : 1.4,
+            maxSide: 3.0,
+            minArea: Math.max(first ? 3 : 2.6, 0.8 * target),
+            maxArea: 1.4 * target,
+            maxAspect: opts.maxBathroomAspect,
+            minFacade: 0,
+          };
+        case "wc":
+          return { minSide: 1.0, maxSide: 2.2, minArea: 0.75 * target, maxArea: 1.5 * target, maxAspect: 2.5, minFacade: 0 };
+        case "kitchen":
+          return {
+            minSide: 2.0 * relax,
+            maxSide: 4.5,
+            minArea: 0.8 * target,
+            maxArea: 1.4 * target,
+            maxAspect: 2.2,
+            minFacade: opts.minKitchenFacade * relax,
+          };
+        case "storage":
+          return { minSide: 1.0, maxSide: 2.5, minArea: 0.6 * target, maxArea: 1.5 * target, maxAspect: 2.5, minFacade: 0 };
+      }
+    })();
+    const minSide = rule.minWidth * relax;
+    const minArea = Math.max(base.minArea, rule.minArea * relax);
+    return {
+      ...base,
+      minSide,
+      maxSide: Math.max(base.maxSide, minSide),
+      minArea,
+      maxArea: Math.max(base.maxArea, 1.3 * minArea),
+    };
   };
 
   const privates: Private[] = [];
@@ -715,7 +815,7 @@ function deriveParams(g: Grid, opts: SubdivisionOptions, relax: number): Params 
   const add = (kind: PrivateKind, count: number, targetOf: (i: number) => number) => {
     let lastTarget = NaN;
     for (let i = 0; i < count; i++) {
-      const target = targetOf(i);
+      const target = Math.max(targetOf(i), opts.roomSizes[sizeOf(kind, i === 0)].minArea * relax);
       if (target !== lastTarget) group++;
       lastTarget = target;
       privates.push({
@@ -725,6 +825,7 @@ function deriveParams(g: Grid, opts: SubdivisionOptions, relax: number): Params 
         target,
         spec: specFor(kind, target, i === 0),
         group,
+        size: sizeOf(kind, i === 0),
       });
     }
   };
@@ -742,11 +843,15 @@ function deriveParams(g: Grid, opts: SubdivisionOptions, relax: number): Params 
   // The living room is what the private rooms leave: at least 30 % of the
   // apartment, unless the programme cannot leave that much.
   const claimed = privates.reduce((s, p) => s + p.target, 0);
-  const minLivingArea = Math.min(0.3 * area, Math.max(12, area - 1.15 * claimed - 0.06 * area)) * relax;
+  const minLivingArea = Math.max(
+    Math.min(0.3 * area, Math.max(12, area - 1.15 * claimed - 0.06 * area)),
+    opts.roomSizes.living.minArea,
+  ) * relax;
 
   return {
-    kLiving: cellsFor(g, opts.minLivingWidth * relax),
-    kCorridor: cellsFor(g, opts.corridorWidth),
+    kLiving: cellsFor(g, opts.roomSizes.living.minWidth * relax),
+    // Corridors narrower than this are merged into a neighbouring room.
+    kCorridor: cellsFor(g, opts.roomSizes.corridor.minWidth),
     doorCells: cellsFor(g, opts.doorWidth),
     minCorridorCells: Math.ceil(opts.minCorridorArea / (g.cell * g.cell)),
     minLivingFacade: opts.minLivingFacade * relax,
@@ -968,6 +1073,8 @@ interface DoorLink {
 
 interface Evaluated {
   cost: number;
+  /** Only when asked for. */
+  checks?: RuleCheck[];
   lab: Int16Array;
   labelCount: number;
   links: DoorLink[];
@@ -1024,7 +1131,7 @@ const AREA_WEIGHT: Record<PrivateKind, number> = { bedroom: 2.0, bathroom: 1.0, 
  * Completes a layout from one candidate per private room, checks every hard
  * rule and returns its cost, or null when a rule is broken.
  */
-function evaluate(g: Grid, p: Params, rects: Rect[]): Evaluated | null {
+function evaluate(g: Grid, p: Params, rects: Rect[], withReport = false): Evaluated | null {
   for (let i = 0; i < rects.length; i++) {
     for (let j = i + 1; j < rects.length; j++) if (rectIoU(rects[i], rects[j]) > 0) return null;
   }
@@ -1039,7 +1146,7 @@ function evaluate(g: Grid, p: Params, rects: Rect[]): Evaluated | null {
     }
   });
 
-  // Living room: the part of the remainder that is at least minLivingWidth wide everywhere.
+  // Living room: the part of the remainder that is at least the living room's minimum width wide everywhere.
   let living: number[] | null = null;
   for (const comp of components(g, opening(g, maskOf(lab, FREE), p.kLiving))) {
     let fac = 0;
@@ -1169,27 +1276,68 @@ function evaluate(g: Grid, p: Params, rects: Rect[]): Evaluated | null {
     if (!reached.has(v)) return null;
     corridorFacade += fac[v] * cell;
   }
-  let kitchenOffLiving = false;
+  // Doors of the private rooms, each onto a public room, chosen by the door
+  // rules (opensTo / notOpensTo); among equals the longest shared wall wins.
+  const openKitchen = p.opts.program.kitchen !== "separate";
+  const rules = p.opts.adjacency.filter((r) => !(openKitchen && (r.a === "kitchen" || r.b === "kitchen")));
+  const kindOf = (v: number): RuleRoom =>
+    v === LIVING ? "living" : v >= p.corridor0 ? "corridor" : p.privates[v - PRIVATE0].kind;
+  const matches = (ref: RuleRoom, v: number) => (ref === "entrance" ? v === start : kindOf(v) === ref);
+  const doorInto: number[] = [];
+  const doorRuns: Run[] = [];
+  const doorBroken: AdjacencyRule[][] = [];
+  let doorPenalty = 0;
   for (const pr of p.privates) {
-    let bestRun: Run | undefined;
-    let bestW = 0;
+    const own = rules.filter((r) => r.a === pr.kind && (r.rule === "opensTo" || r.rule === "notOpensTo"));
+    let best: Run | undefined;
+    let bestPen = Infinity;
     let bestPub = 0;
+    let bestBroken: AdjacencyRule[] = [];
     for (const pub of reached) {
       const run = runBetween(pr.label, pub);
       if (!run || run.len < p.doorCells) continue;
-      // A door off the hall beats one off the living room; a kitchen wants the living room.
-      const preferred = pr.kind === "kitchen" ? pub === LIVING : pub >= p.corridor0;
-      const w = run.len * (preferred ? 2 : 1);
-      if (w > bestW) {
-        bestW = w;
-        bestRun = run;
+      let pen = 0;
+      let banned = false;
+      const broken: AdjacencyRule[] = [];
+      for (const r of own) {
+        const m = matches(r.b, pub);
+        if (r.rule === "opensTo" ? m : !m) continue;
+        broken.push(r);
+        pen += r.weight;
+        if (r.hard) banned = true;
+      }
+      if (banned) continue;
+      if (pen < bestPen - 1e-9 || (pen < bestPen + 1e-9 && run.len > (best?.len ?? 0))) {
+        best = run;
+        bestPen = pen;
         bestPub = pub;
+        bestBroken = broken;
       }
     }
-    if (!bestRun) return null;
-    if (pr.kind === "kitchen" && bestPub !== LIVING) kitchenOffLiving = true;
-    links.push({ kind: "door", run: bestRun });
+    if (!best) return null;
+    doorPenalty += bestPen;
+    doorInto.push(bestPub);
+    doorRuns.push(best);
+    doorBroken.push(bestBroken);
+    links.push({ kind: "door", run: best });
   }
+
+  // Walking: from the entrance door through the living room and corridors.
+  const walk = walkDistances(g, lab, isPublic, g.entranceIdx);
+  const walkToDoor = (k: number): number => {
+    const run = doorRuns[k];
+    const pub = doorInto[k];
+    const mid = Math.min(run.e - 1, Math.floor((run.s + run.e) / 2));
+    const cells = run.vertical
+      ? [mid * nx + run.line - 1, mid * nx + run.line]
+      : [(run.line - 1) * nx + mid, run.line * nx + mid];
+    const i = cells.find((c) => lab[c] === pub) ?? cells[0];
+    return walk[i] * cell;
+  };
+  const walks = p.privates.map((_, k) => walkToDoor(k));
+  let livingWalk = Infinity;
+  for (let i = 0; i < lab.length; i++) if (lab[i] === LIVING) livingWalk = Math.min(livingWalk, walk[i] * cell);
+  const circ = p.opts.circulation;
 
   // Soft criteria.
   const centre = (v: number): Pt => ({
@@ -1198,6 +1346,8 @@ function evaluate(g: Grid, p: Params, rects: Rect[]): Evaluated | null {
   });
   const livBox = (lx1 - lx0) * (ly1 - ly0);
   const livAspect = Math.max(lx1 - lx0, ly1 - ly0) / Math.min(lx1 - lx0, ly1 - ly0);
+  const walkSum = walks.reduce((sum, w) => sum + w, 0);
+  const overWalk = walks.reduce((sum, w) => sum + Math.max(0, w - circ.maxWalk), 0);
   let cost =
     8.0 * ((corridorCells * c2) / total) + // circulation is wasted area
     0.4 * corridorFacade + // daylight belongs to rooms, not to circulation
@@ -1207,9 +1357,10 @@ function evaluate(g: Grid, p: Params, rects: Rect[]): Evaluated | null {
     1.0 * Math.max(0, livAspect - 1.8) +
     0.1 * Math.max(0, cornerCount(g, lab, LIVING) - 2) + // every extra corner is a jog in a wall
     1.5 * Math.max(0, 1 - (fac[LIVING] * cell) / 3.5) +
-    (kitchenOffLiving ? 1.0 : 0);
+    doorPenalty + // the door rules
+    (walks.length > 0 ? circ.walkWeight * (walkSum / walks.length / g.diag) : 0) + // short walks
+    2.0 * (overWalk / circ.maxWalk);
   const bedrooms = p.privates.filter((pr) => pr.kind === "bedroom");
-  const wet: Pt[] = [];
   p.privates.forEach((pr, k) => {
     const v = pr.label;
     const r = rects[k];
@@ -1222,13 +1373,12 @@ function evaluate(g: Grid, p: Params, rects: Rect[]): Evaluated | null {
           0.15 * Math.max(0, cornerCount(g, lab, v) - 3) +
           4.0 * (Math.max(0, 1.3 * a - livA) / total) + // living is the largest room
           1.0 * Math.max(0, 1 - (fac[v] * cell) / 2.5) +
-          (-0.75 * (dist(centre(v), g.entrance) / g.diag)) / bedrooms.length + // bedrooms away from the door
+          (-circ.nightZone * (dist(centre(v), g.entrance) / g.diag)) / bedrooms.length + // night zone away from the door
           -0.5 * (r.wall / perim);
         break;
       case "bathroom":
       case "wc": {
         const c = centre(v);
-        wet.push(c);
         cost +=
           3.0 * (fac[v] / perim) + // wet rooms stay off the facade
           1.5 * (dist(c, g.entrance) / g.diag) + // ... and near the entrance
@@ -1244,10 +1394,212 @@ function evaluate(g: Grid, p: Params, rects: Rect[]): Evaluated | null {
         break;
     }
   });
-  // Wet rooms together share their pipes.
-  for (let i = 1; i < wet.length; i++) cost += 1.0 * (dist(wet[i], wet[0]) / g.diag);
 
-  return { cost, lab, labelCount: next, links, rects };
+  // Rules on where rooms lie: near, adjacent, apart.
+  const corridors: number[] = [];
+  for (let v = p.corridor0; v < next; v++) if (!dropped.has(v) && count[v] > 0) corridors.push(v);
+  const labelsOf = (ref: RuleRoom): number[] =>
+    ref === "living"
+      ? [LIVING]
+      : ref === "corridor"
+        ? corridors
+        : ref === "entrance"
+          ? []
+          : p.privates.filter((pr) => pr.kind === ref).map((pr) => pr.label);
+  const shares = (x: number, y: number) => (runBetween(x, y)?.len ?? 0) > 0;
+  const walkTo = (v: number): number => {
+    if (v === LIVING) return livingWalk;
+    if (v >= p.corridor0) {
+      let m = Infinity;
+      for (let i = 0; i < lab.length; i++) if (lab[i] === v) m = Math.min(m, walk[i] * cell);
+      return m;
+    }
+    return walks[v - PRIVATE0];
+  };
+  const placed: { rule: AdjacencyRule; broken: number[] }[] = [];
+  for (const rule of rules) {
+    if (rule.rule === "opensTo" || rule.rule === "notOpensTo") continue;
+    const as = labelsOf(rule.a);
+    if (as.length === 0) continue;
+    const broken: number[] = [];
+    if (rule.b === "entrance") {
+      for (const la of as) {
+        const d = walkTo(la);
+        const far = d > circ.nearDistance;
+        if (rule.rule === "apart" ? !far : far) broken.push(la);
+        cost += rule.weight * (rule.rule === "apart" ? Math.max(0, 1 - d / g.diag) : d / g.diag);
+      }
+    } else {
+      const bs = labelsOf(rule.b);
+      let applies = false;
+      for (const la of as) {
+        const others = bs.filter((lb) => lb !== la);
+        if (others.length === 0) continue;
+        applies = true;
+        if (rule.rule === "near") {
+          let d = Infinity;
+          for (const lb of others) d = Math.min(d, shares(la, lb) ? 0 : dist(centre(la), centre(lb)));
+          cost += rule.weight * (d / g.diag);
+          if (d > circ.nearDistance) broken.push(la);
+        } else if (rule.rule === "adjacent") {
+          if (!others.some((lb) => shares(la, lb))) {
+            broken.push(la);
+            cost += rule.weight;
+          }
+        } else if (others.some((lb) => shares(la, lb))) {
+          broken.push(la);
+          cost += rule.weight;
+        }
+      }
+      if (!applies) continue;
+    }
+    if (rule.hard && broken.length > 0) return null;
+    placed.push({ rule, broken });
+  }
+
+  const ev: Evaluated = { cost, lab, labelCount: next, links, rects };
+  if (!withReport) return ev;
+
+  // The report: one line per rule.
+  const f = (v: number) => (Math.round(v * 10) / 10).toFixed(1);
+  const nameOf = (v: number): string => {
+    if (v === LIVING) return "Living room";
+    if (v >= p.corridor0) return "Corridor";
+    const pr = p.privates[v - PRIVATE0];
+    const same = p.privates.filter((q) => q.kind === pr.kind);
+    const base = KIND_NAME[pr.kind];
+    return same.length > 1 ? `${base} ${same.indexOf(pr) + 1}` : base;
+  };
+  const checks: RuleCheck[] = [];
+  const sizes = p.opts.roomSizes;
+  {
+    const min = sizes.living;
+    const width = p.kLiving * cell;
+    checks.push({
+      group: "size",
+      text: `Living room at least ${f(min.minArea)} m², ${f(min.minWidth)} m wide`,
+      ok: livA >= min.minArea - 1e-6 && width >= min.minWidth - 1e-6,
+      detail: `${f(livA)} m²${width < min.minWidth - 1e-6 ? `, narrowest part ${f(width)} m` : ""}`,
+    });
+  }
+  p.privates.forEach((pr, k) => {
+    const min = sizes[pr.size];
+    const a = count[pr.label] * c2;
+    const width = Math.min(rects[k].w, rects[k].h) * cell;
+    checks.push({
+      group: "size",
+      text: `${nameOf(pr.label)} at least ${f(min.minArea)} m², ${f(min.minWidth)} m wide`,
+      ok: a >= min.minArea - 1e-6 && width >= min.minWidth - 1e-6,
+      detail: `${f(a)} m², ${f(width)} m wide`,
+    });
+  });
+  if (corridors.length > 0) {
+    checks.push({
+      group: "size",
+      text: `Corridors at least ${f(sizes.corridor.minWidth)} m wide`,
+      ok: p.kCorridor * cell >= sizes.corridor.minWidth - 1e-6,
+    });
+  }
+  for (const rule of rules) {
+    if (rule.rule === "opensTo" || rule.rule === "notOpensTo") {
+      if (!p.privates.some((pr) => pr.kind === rule.a)) continue;
+      const bad = p.privates.filter((_, k) => doorBroken[k].includes(rule)).map((pr) => pr.label);
+      checks.push({
+        group: "adjacency",
+        text: rule.text,
+        ok: bad.length === 0,
+        detail:
+          bad.length === 0
+            ? undefined
+            : bad.map((v) => `${nameOf(v)} opens into the ${nameOf(doorInto[v - PRIVATE0]).toLowerCase()}`).join("; "),
+      });
+      continue;
+    }
+    const hit = placed.find((q) => q.rule === rule);
+    if (!hit) continue;
+    checks.push({
+      group: "adjacency",
+      text: rule.text,
+      ok: hit.broken.length === 0,
+      detail: hit.broken.length === 0 ? undefined : hit.broken.map(nameOf).join(", "),
+    });
+  }
+  if (walks.length > 0) {
+    const far = p.privates.map((pr, k) => ({ v: pr.label, w: walks[k] })).sort((x, y) => y.w - x.w)[0];
+    checks.push({
+      group: "circulation",
+      text: `Every room within ${f(circ.maxWalk)} m walk of the entrance`,
+      ok: far.w <= circ.maxWalk + 1e-6,
+      detail: `farthest: ${nameOf(far.v)}, ${f(far.w)} m`,
+    });
+  }
+  if (bedrooms.length > 0) {
+    const shallow = bedrooms.filter((pr) => walks[pr.label - PRIVATE0] < livingWalk - 1e-6).map((pr) => pr.label);
+    checks.push({
+      group: "circulation",
+      text: "Bedrooms deeper in the plan than the living room (night zone)",
+      ok: shallow.length === 0,
+      detail: shallow.length === 0 ? undefined : shallow.map(nameOf).join(", "),
+    });
+  }
+  const share = (corridorCells * c2) / total;
+  checks.push({
+    group: "circulation",
+    text: `Corridors take at most ${Math.round(circ.maxCorridorShare * 100)} % of the apartment`,
+    ok: share <= circ.maxCorridorShare + 1e-6,
+    detail: `${Math.round(share * 100)} %`,
+  });
+  return { ...ev, checks };
+}
+
+const KIND_NAME: Record<PrivateKind, string> = {
+  bedroom: "Bedroom",
+  bathroom: "Bathroom",
+  wc: "WC",
+  kitchen: "Kitchen",
+  storage: "Storage",
+};
+
+/**
+ * Walking distance from one cell through the cells whose label passes
+ * `walkable`, with diagonal steps (no cutting corners). In cells; Infinity
+ * where it cannot be reached. Steps count 2 straight and 3 diagonally, so the
+ * result is a close and cheap estimate of the true walk.
+ */
+function walkDistances(g: Grid, lab: Int16Array, walkable: (v: number) => boolean, from: number): Float64Array {
+  const { nx, ny } = g;
+  const n = lab.length;
+  const INF = 0x3fffffff;
+  const d = new Int32Array(n).fill(INF);
+  const buckets: number[][] = [];
+  d[from] = 0;
+  buckets[0] = [from];
+  const ok = (x: number, y: number) => x >= 0 && y >= 0 && x < nx && y < ny && walkable(lab[y * nx + x]);
+  for (let c = 0; c < buckets.length; c++) {
+    const bucket = buckets[c];
+    if (!bucket) continue;
+    for (const i of bucket) {
+      if (d[i] !== c) continue;
+      const x = i % nx;
+      const y = (i - x) / nx;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          if (!ok(x + dx, y + dy)) continue;
+          if (dx !== 0 && dy !== 0 && (!ok(x + dx, y) || !ok(x, y + dy))) continue;
+          const j = (y + dy) * nx + x + dx;
+          const nd = c + (dx !== 0 && dy !== 0 ? 3 : 2);
+          if (nd < d[j]) {
+            d[j] = nd;
+            (buckets[nd] ??= []).push(j);
+          }
+        }
+      }
+    }
+  }
+  const out = new Float64Array(n);
+  for (let i = 0; i < n; i++) out[i] = d[i] === INF ? Infinity : d[i] / 2;
+  return out;
 }
 
 /** Partial layouts kept between steps of the beam search, and how many complete ones are scored. */
@@ -1685,5 +2037,6 @@ function toLayout(
     }
   }
 
-  return { rooms, doors, zones, walls, cost: ev.cost, relaxation: relax };
+  const checks = evaluate(g, p, ev.rects, true)?.checks ?? [];
+  return { rooms, doors, zones, walls, cost: ev.cost, relaxation: relax, checks };
 }

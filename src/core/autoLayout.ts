@@ -13,10 +13,18 @@
  * (src/config/layoutRules.json), not from this code.
  */
 import {
+  ADJACENCY_KINDS,
+  type AdjacencyRule,
   type ApartmentInput,
+  type CirculationRules,
   type Layout,
+  RULE_ROOMS,
   type RoomProgram,
+  type RoomSize,
   type RoomType,
+  type RuleCheck,
+  SIZED_ROOMS,
+  type SizedRoom,
   type SubdivisionOptions,
   generateLayouts,
 } from "../roomSubdivision.ts";
@@ -39,11 +47,8 @@ import { type LinkedSpaces, linkSpaces } from "./spaces.ts";
 export type LayoutRules = Partial<SubdivisionOptions>;
 
 const NUMBER_RULES = [
-  "minLivingWidth",
-  "minBedroomSide",
   "maxBedroomAspect",
   "maxBathroomAspect",
-  "corridorWidth",
   "minCorridorArea",
   "doorWidth",
   "entranceClearance",
@@ -71,6 +76,61 @@ export function parseLayoutRules(raw: unknown): LayoutRules {
     if (!ok) throw new Error(`Layout rules: invalid or missing "${key}".`);
     rules[key] = [v[0], v[1]] as [number, number];
   }
+
+  // Room sizes.
+  const rooms = c.rooms as Record<string, RoomSize> | undefined;
+  if (!rooms || typeof rooms !== "object") throw new Error('Layout rules: invalid or missing "rooms".');
+  const sizes = {} as Record<SizedRoom, RoomSize>;
+  for (const kind of SIZED_ROOMS) {
+    const r = rooms[kind];
+    const ok = r && typeof r.minArea === "number" && r.minArea >= 0 && typeof r.minWidth === "number" && r.minWidth > 0;
+    if (!ok) throw new Error(`Layout rules: invalid or missing size for "${kind}" in "rooms".`);
+    sizes[kind] = { minArea: r.minArea, minWidth: r.minWidth };
+  }
+  for (const kind of Object.keys(rooms)) {
+    if (!SIZED_ROOMS.includes(kind as SizedRoom)) throw new Error(`Layout rules: unknown room "${kind}" in "rooms".`);
+  }
+  rules.roomSizes = sizes;
+
+  // Adjacency.
+  if (!Array.isArray(c.adjacency)) throw new Error('Layout rules: invalid or missing "adjacency".');
+  rules.adjacency = c.adjacency.map((raw, i): AdjacencyRule => {
+    const r = raw as AdjacencyRule;
+    const where = `adjacency rule ${i + 1}`;
+    if (!r || !RULE_ROOMS.includes(r.a) || !RULE_ROOMS.includes(r.b)) {
+      throw new Error(`Layout rules: ${where} names an unknown room (use ${RULE_ROOMS.join(", ")}).`);
+    }
+    if (!ADJACENCY_KINDS.includes(r.rule)) {
+      throw new Error(`Layout rules: ${where} has an unknown rule (use ${ADJACENCY_KINDS.join(", ")}).`);
+    }
+    if (r.a === "entrance" || r.a === "living" || r.a === "corridor") {
+      if (r.rule === "opensTo" || r.rule === "notOpensTo") {
+        throw new Error(`Layout rules: ${where}: only a room with a door of its own can have a door rule.`);
+      }
+    }
+    if (r.a === "entrance") throw new Error(`Layout rules: ${where}: put the entrance second.`);
+    if (typeof r.weight !== "number" || !(r.weight >= 0)) throw new Error(`Layout rules: ${where} has an invalid weight.`);
+    if (typeof r.text !== "string" || r.text.trim() === "") throw new Error(`Layout rules: ${where} needs a text.`);
+    return { a: r.a, b: r.b, rule: r.rule, weight: r.weight, hard: r.hard === true, text: r.text };
+  });
+
+  // Circulation.
+  const circ = c.circulation as Record<string, unknown> | undefined;
+  if (!circ || typeof circ !== "object") throw new Error('Layout rules: invalid or missing "circulation".');
+  const cnum = (key: keyof CirculationRules, positive: boolean): number => {
+    const v = circ[key];
+    if (typeof v !== "number" || !(positive ? v > 0 : v >= 0)) {
+      throw new Error(`Layout rules: invalid or missing "circulation.${key}".`);
+    }
+    return v;
+  };
+  rules.circulation = {
+    walkWeight: cnum("walkWeight", false),
+    maxWalk: cnum("maxWalk", true),
+    nightZone: cnum("nightZone", false),
+    maxCorridorShare: cnum("maxCorridorShare", true),
+    nearDistance: cnum("nearDistance", true),
+  };
   return rules;
 }
 
@@ -436,6 +496,8 @@ export interface LayoutProposal {
   rooms: string[];
   /** 1 when every minimum in the rules was kept; lower when they were scaled by this. */
   relaxation: number;
+  /** How the layout fares against each size, adjacency and circulation rule. */
+  checks: RuleCheck[];
 }
 
 export type LayoutProposals =
@@ -453,29 +515,37 @@ export function proposeLayouts(
 ): LayoutProposals {
   const built = buildLayoutInput(storey, apartmentId);
   if (!built.ok) return built;
-  let layouts: Layout[];
-  try {
-    // Thickness 0: the engine's rooms then meet on the partition centrelines.
-    layouts = generateLayouts(built.input, { ...rules, ...(program ? { program } : {}), wallThickness: 0, kitchen: false }, count);
-  } catch (e) {
-    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
-  }
-  const proposals: LayoutProposal[] = [];
+  const engineOptions = { ...rules, ...(program ? { program } : {}), wallThickness: 0, kitchen: false };
   // The old windows would block or straddle the new partitions.
   const shell = options.windows ? removeRoomWindows(built.shell, [built.spaceId]) : built.shell;
-  for (const layout of layouts) {
-    let applied = applyLayout(shell, apartmentId, built.input, layout, options);
-    if (!applied) continue;
-    if (options.windows) {
-      const spaceIds = applied.apartments.find((a) => a.id === apartmentId)!.spaceIds;
-      applied = placeWindows(applied, options.windows, { spaceIds });
+  const proposals: LayoutProposal[] = [];
+  let layouts: Layout[] = [];
+  // Some layouts cannot be drawn as clean walls (mostly on plans not square
+  // to the axes); when none of the first few can, a wider set is tried.
+  for (const asked of [count, count * 4]) {
+    try {
+      // Thickness 0: the engine's rooms then meet on the partition centrelines.
+      layouts = generateLayouts(built.input, engineOptions, asked);
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message : String(e) };
     }
-    const apartment = applied.apartments.find((a) => a.id === apartmentId)!;
-    proposals.push({
-      storey: applied,
-      rooms: apartment.spaceIds.map((id) => applied.spaces.find((s) => s.id === id)!.name),
-      relaxation: layout.relaxation,
-    });
+    for (const layout of layouts) {
+      if (proposals.length >= count) break;
+      let applied = applyLayout(shell, apartmentId, built.input, layout, options);
+      if (!applied) continue;
+      if (options.windows) {
+        const spaceIds = applied.apartments.find((a) => a.id === apartmentId)!.spaceIds;
+        applied = placeWindows(applied, options.windows, { spaceIds });
+      }
+      const apartment = applied.apartments.find((a) => a.id === apartmentId)!;
+      proposals.push({
+        storey: applied,
+        rooms: apartment.spaceIds.map((id) => applied.spaces.find((s) => s.id === id)!.name),
+        relaxation: layout.relaxation,
+        checks: layout.checks,
+      });
+    }
+    if (proposals.length > 0 || layouts.length < asked) break;
   }
   if (proposals.length === 0) {
     return {

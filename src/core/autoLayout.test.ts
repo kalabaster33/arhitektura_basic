@@ -87,9 +87,17 @@ const reasonOf = (storey: Storey, apartmentId: string) => {
 
 describe("layout rules", () => {
   it("reads the config and rejects damaged values", () => {
-    expect(rules.minBedroomSide).toBe(2.5);
+    expect(rules.roomSizes?.mainBedroom.minArea).toBe(12);
     expect(rules.bedroomAreaRange).toEqual([9, 16]);
-    expect(() => parseLayoutRules({ ...layoutRules, corridorWidth: 0 })).toThrow(/corridorWidth/);
+    expect(rules.adjacency?.length).toBeGreaterThan(0);
+    expect(() => parseLayoutRules({ ...layoutRules, rooms: { ...layoutRules.rooms, corridor: { minArea: 0, minWidth: 0 } } })).toThrow(/corridor/);
+    expect(() => parseLayoutRules({ ...layoutRules, rooms: { ...layoutRules.rooms, attic: { minArea: 1, minWidth: 1 } } })).toThrow(/attic/);
+    const bad = (rule: object) => parseLayoutRules({ ...layoutRules, adjacency: [rule] });
+    expect(() => bad({ a: "garage", b: "living", rule: "near", weight: 1, text: "x" })).toThrow(/unknown room/);
+    expect(() => bad({ a: "bedroom", b: "living", rule: "beside", weight: 1, text: "x" })).toThrow(/unknown rule/);
+    expect(() => bad({ a: "living", b: "corridor", rule: "opensTo", weight: 1, text: "x" })).toThrow(/door rule/);
+    expect(() => bad({ a: "bedroom", b: "living", rule: "near", weight: 1 })).toThrow(/text/);
+    expect(() => parseLayoutRules({ ...layoutRules, circulation: { ...layoutRules.circulation, maxWalk: 0 } })).toThrow(/maxWalk/);
     expect(() => parseLayoutRules({ ...layoutRules, bathroomAreaRange: [6, 3] })).toThrow(
       /bathroomAreaRange/,
     );
@@ -256,10 +264,24 @@ describe("layout proposals", () => {
 
   it("replaces the old partitions of the apartment and reports relaxed minimums", () => {
     const { storey, apartmentId, cross } = plan("east");
-    const [first] = proposalsOf(storey, apartmentId);
+    // 18 m2 is below the room minimums of the config; smaller ones for this test.
+    const small = {
+      ...rules,
+      roomSizes: {
+        ...rules.roomSizes!,
+        living: { minArea: 5, minWidth: 2.5 },
+        mainBedroom: { minArea: 7, minWidth: 2.5 },
+        bathroom: { minArea: 3, minWidth: 1.5 },
+      },
+    };
+    const result = proposeLayouts(storey, apartmentId, small, options);
+    if (!result.ok) throw new Error(result.reason);
+    const [first] = result.proposals;
     expect(first.storey.walls.some((w) => w.id === cross.id)).toBe(false);
     // 2.8 m wide: too tight for the default minimums.
     expect(first.relaxation).toBeLessThan(1);
+    // The report measures against the full minimums.
+    expect(first.checks.some((c) => c.group === "size" && !c.ok)).toBe(true);
     expect(first.rooms).toContain("Bedroom");
   });
 
