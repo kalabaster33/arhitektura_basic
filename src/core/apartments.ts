@@ -9,7 +9,7 @@
 import { union } from "polyclip-ts";
 import { type Pt, NODE_TOL, distToSegment, lerp, ringSignedArea } from "./geometry.ts";
 import { newId } from "./ids.ts";
-import type { Apartment, Storey } from "./model.ts";
+import type { Apartment, ApartmentProgram, Storey } from "./model.ts";
 import { openingGeometry, openingSides } from "./openings.ts";
 import { type LinkedSpaces, linkSpaces } from "./spaces.ts";
 
@@ -53,6 +53,14 @@ export function renameApartment(storey: Storey, apartmentId: string, name: strin
   return {
     ...storey,
     apartments: storey.apartments.map((a) => (a.id === apartmentId ? { ...a, name } : a)),
+  };
+}
+
+/** Sets the rooms the layout generator plans for the apartment. */
+export function setApartmentProgram(storey: Storey, apartmentId: string, program: ApartmentProgram): Storey {
+  return {
+    ...storey,
+    apartments: storey.apartments.map((a) => (a.id === apartmentId ? { ...a, program: { ...program } } : a)),
   };
 }
 

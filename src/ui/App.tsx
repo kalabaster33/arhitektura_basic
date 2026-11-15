@@ -9,10 +9,10 @@ import layoutRules from "../config/layoutRules.json";
 import mapSettingsJson from "../config/mapSettings.json";
 import roomChecks from "../config/roomChecks.json";
 import siteRulesJson from "../config/siteRules.json";
+import storeySplitJson from "../config/storeySplit.json";
 import { parseAnnotationStyle, storeyAnnotations } from "../core/annotations.ts";
 import { describeApartments } from "../core/apartments.ts";
 import {
-  type LayoutProposal,
   apartmentInteriorWalls,
   buildLayoutInput,
   parseLayoutRules,
@@ -64,6 +64,13 @@ import {
   structureStatus,
   upperOutline,
 } from "../core/structure.ts";
+import {
+  type Access,
+  type UnitType,
+  parseSplitRules,
+  proposeSplits,
+  usableArea,
+} from "../core/storeySplit.ts";
 import { download, fileBase } from "../export/download.ts";
 import { ExportDialog } from "./ExportDialog.tsx";
 import { MapPicker } from "./MapPicker.tsx";
@@ -86,6 +93,7 @@ import {
   WarningsPanel,
 } from "./Sidebar.tsx";
 import { useProjectStore } from "./useProjectStore.ts";
+import { StoreyPlanPanel } from "./StoreyPlanPanel.tsx";
 import { CorePanel, ErkerPanel, LocationPanel, OutlinePanel, Stepper } from "./WorkflowPanels.tsx";
 
 const areaConfig = parseAreaConfig(areaDefinitions);
@@ -97,15 +105,35 @@ const exportConfig = parseExportConfig(exportDefaults);
 const dimensionStyle = parseDimensionStyle(dimensionStyleJson);
 const annotationStyle = parseAnnotationStyle(annotationStyleJson);
 const mapSettings = parseMapSettings(mapSettingsJson);
+const splitRules = parseSplitRules(storeySplitJson);
 /** Printed on the Notes sheet of an exported schedule. */
 const exportNotes = [areaDefinitions._status, siteRulesJson._status];
 
-/** Generated layouts being looked at before one is applied. */
-interface LayoutPreview {
+/** Generated plans being looked at before one is applied: room layouts of an apartment, or storey plans. */
+interface PlanPreview {
   storeyId: string;
-  apartmentId: string;
-  proposals: LayoutProposal[];
+  /** "Layout" or "Storey plan". */
+  title: string;
+  proposals: { storey: Storey; summary: string; note?: string }[];
   index: number;
+  /** A storey plan that is also to be drawn on these storeys, with the same mix. */
+  similar?: { units: UnitType[]; access: Access | "auto"; storeyIds: string[] };
+}
+
+const MIX_STORAGE_KEY = "arhitektura.unitMix";
+
+/** The apartment mix as last left in this browser, else the one in the config. */
+function loadMix(): UnitType[] {
+  try {
+    const raw = localStorage.getItem(MIX_STORAGE_KEY);
+    if (raw) {
+      const saved = parseSplitRules({ ...storeySplitJson, unitTypes: JSON.parse(raw) }).unitTypes;
+      if (saved.length > 0) return saved;
+    }
+  } catch {
+    // A damaged or missing entry: start from the config.
+  }
+  return splitRules.unitTypes.map((u) => ({ ...u, program: { ...u.program } }));
 }
 
 /** Apartments are told apart on the plan by colour, in the order they were made. */
@@ -192,7 +220,20 @@ export function App() {
   const { project } = store;
   const [activeStoreyId, setActiveStoreyId] = useState<string>();
   const realStorey = getActiveStorey(project, activeStoreyId);
-  const [preview, setPreview] = useState<LayoutPreview | null>(null);
+  const [preview, setPreview] = useState<PlanPreview | null>(null);
+  const [mix, setMix] = useState<UnitType[]>(loadMix);
+  useEffect(() => {
+    try {
+      localStorage.setItem(MIX_STORAGE_KEY, JSON.stringify(mix));
+    } catch {
+      // Not kept in a private window.
+    }
+  }, [mix]);
+  const [access, setAccess] = useState<Access | "auto">("auto");
+  const [alsoSimilar, setAlsoSimilar] = useState(true);
+  const [splitBusy, setSplitBusy] = useState(false);
+  const [splitError, setSplitError] = useState<string | null>(null);
+  const [generatingAll, setGeneratingAll] = useState<string | null>(null);
   const [layoutError, setLayoutError] = useState<{ apartmentId: string; reason: string } | null>(null);
   const previewing = preview !== null && preview.storeyId === realStorey.id;
   // While a generated layout is previewed, the whole screen shows the storey
@@ -356,9 +397,11 @@ export function App() {
   };
 
   // Any change to the project, or another storey, ends a preview: it was made for the plan as it was.
+  const keptLayoutError = useRef<{ apartmentId: string; reason: string } | null>(null);
   useEffect(() => {
     setPreview(null);
-    setLayoutError(null);
+    setLayoutError(keptLayoutError.current);
+    keptLayoutError.current = null;
   }, [project, activeStoreyId]);
 
   /** Why each apartment on this storey cannot be laid out automatically, if it cannot. */
@@ -370,6 +413,12 @@ export function App() {
     }
     return blockers;
   }, [realStorey]);
+
+  const applyOptions = {
+    partitionThickness: thickness.interior,
+    door: editorDefaults.openings.door,
+    snap: project.grid.snap,
+  };
 
   const generateLayout = (apartmentId: string) => {
     const apartment = realStorey.apartments.find((a) => a.id === apartmentId);
@@ -383,11 +432,7 @@ export function App() {
     ) {
       return;
     }
-    const result = proposeLayouts(realStorey, apartmentId, layoutRuleSet, {
-      partitionThickness: thickness.interior,
-      door: editorDefaults.openings.door,
-      snap: project.grid.snap,
-    });
+    const result = proposeLayouts(realStorey, apartmentId, layoutRuleSet, applyOptions, 3, apartment.program);
     if (!result.ok) {
       setLayoutError({ apartmentId, reason: result.reason });
       return;
@@ -395,13 +440,113 @@ export function App() {
     setLayoutError(null);
     setSelection(null);
     setTool("select");
-    setPreview({ storeyId: realStorey.id, apartmentId, proposals: result.proposals, index: 0 });
+    setPreview({
+      storeyId: realStorey.id,
+      title: "Layout",
+      proposals: result.proposals.map((q) => ({
+        storey: q.storey,
+        summary: `${apartment.name} · ${q.rooms.join(", ")}`,
+        note: q.relaxation < 1 ? `tight: minimum sizes scaled to ${Math.round(q.relaxation * 100)} %` : undefined,
+      })),
+      index: 0,
+    });
+  };
+
+  /** Lays out every apartment of the storey that can be, one at a time so the screen keeps up. */
+  const generateAll = () => {
+    const ids = realStorey.apartments.filter((a) => !layoutBlockers.has(a.id)).map((a) => a.id);
+    if (ids.length === 0) return;
+    const own = realStorey.apartments.filter((a) => apartmentInteriorWalls(realStorey, a.id).length > 0);
+    if (
+      own.length > 0 &&
+      !window.confirm(
+        `${own.map((a) => a.name).join(", ")} already ${own.length > 1 ? "have" : "has"} partitions. New layouts replace them. Continue?`,
+      )
+    ) {
+      return;
+    }
+    let working = realStorey;
+    const failed: string[] = [];
+    const step = (k: number) => {
+      if (k >= ids.length) {
+        setGeneratingAll(null);
+        // Reported after the project change, which clears old messages.
+        keptLayoutError.current =
+          failed.length > 0 ? { apartmentId: "", reason: `No layout found for ${failed.join(", ")}.` } : null;
+        if (working !== realStorey) store.set(replaceStorey(project, working));
+        else setLayoutError(keptLayoutError.current);
+        return;
+      }
+      const apartment = working.apartments.find((a) => a.id === ids[k]);
+      setGeneratingAll(`Laying out ${apartment?.name ?? ""} (${k + 1} of ${ids.length})…`);
+      setTimeout(() => {
+        if (apartment) {
+          const result = proposeLayouts(working, apartment.id, layoutRuleSet, applyOptions, 3, apartment.program);
+          if (result.ok) working = result.proposals[0].storey;
+          else failed.push(apartment.name);
+        }
+        step(k + 1);
+      }, 20);
+    };
+    step(0);
+  };
+
+  // ------------------------------------------------------------ storey plan
+  const usable = useMemo(() => usableArea(building, realStorey.id, splitRules), [building, realStorey.id]);
+  const similarStoreyIds = useMemo(() => {
+    const mine = JSON.stringify(storeyOutline(building, realStorey.id));
+    return storeys
+      .filter((s) => s.id !== realStorey.id && JSON.stringify(storeyOutline(building, s.id)) === mine)
+      .map((s) => s.id);
+  }, [building, realStorey.id, storeys]);
+  const hasOwnPlan = realStorey.apartments.length > 0 || realStorey.walls.some((w) => !w.part);
+
+  const generateSplit = () => {
+    setSplitBusy(true);
+    setSplitError(null);
+    // Let the button show that it is working before the search takes the thread.
+    setTimeout(() => {
+      const result = proposeSplits(building, realStorey, mix, access, splitRules, 3);
+      setSplitBusy(false);
+      if (!result.ok) {
+        setSplitError(result.reason);
+        return;
+      }
+      setSelection(null);
+      setTool("select");
+      const fmt = (v: number) => v.toLocaleString(undefined, { maximumFractionDigits: 1 });
+      setPreview({
+        storeyId: realStorey.id,
+        title: "Storey plan",
+        proposals: result.proposals.map((q) => ({
+          storey: q.storey,
+          summary: q.apartments.map((a) => `${a.name} ${a.unitType} ${fmt(a.area)} m²`).join(" · "),
+          note: q.access === "corridor" ? "reached along a corridor" : "reached from the hall",
+        })),
+        index: 0,
+        similar:
+          alsoSimilar && similarStoreyIds.length > 0
+            ? { units: mix.map((u) => ({ ...u })), access, storeyIds: similarStoreyIds }
+            : undefined,
+      });
+    }, 30);
   };
 
   const stepPreview = (by: number) =>
     setPreview((p) => p && { ...p, index: (p.index + by + p.proposals.length) % p.proposals.length });
   const applyPreview = () => {
-    if (previewing) store.set(replaceStorey(project, preview.proposals[preview.index].storey));
+    if (!previewing) return;
+    let next = replaceStorey(project, preview.proposals[preview.index].storey);
+    // The same plan on the storeys with the same outline: the search gives the same answers there.
+    for (const id of preview.similar?.storeyIds ?? []) {
+      const b = findBuilding(next, id)!;
+      const target = b.storeys.find((s) => s.id === id)!;
+      const result = proposeSplits(b, target, preview.similar!.units, preview.similar!.access, splitRules, 3);
+      if (result.ok) {
+        next = replaceStorey(next, result.proposals[Math.min(preview.index, result.proposals.length - 1)].storey);
+      }
+    }
+    store.set(next);
   };
 
   // Latest values for the keyboard handler, which is attached once.
@@ -687,13 +832,13 @@ export function App() {
           {previewing && (
             <div className="preview-bar" role="region" aria-label="Layout preview">
               <strong>
-                Layout {preview.index + 1} of {preview.proposals.length}
+                {preview.title} {preview.index + 1} of {preview.proposals.length}
               </strong>
               <span>
-                {storey.apartments.find((a) => a.id === preview.apartmentId)?.name} ·{" "}
-                {preview.proposals[preview.index].rooms.join(", ")}
-                {preview.proposals[preview.index].relaxation < 1 &&
-                  ` · tight: minimum sizes scaled to ${Math.round(preview.proposals[preview.index].relaxation * 100)} %`}
+                {preview.proposals[preview.index].summary}
+                {preview.proposals[preview.index].note && ` · ${preview.proposals[preview.index].note}`}
+                {preview.similar &&
+                  ` · also on ${preview.similar.storeyIds.length} more storey${preview.similar.storeyIds.length > 1 ? "s" : ""}`}
               </span>
               <span className="spacer" />
               {preview.proposals.length > 1 && (
@@ -855,6 +1000,22 @@ export function App() {
           )}
           {stage === "apartments" && (
             <>
+              <StoreyPlanPanel
+                storeyName={realStorey.name}
+                usable={usable}
+                mix={mix}
+                onMix={setMix}
+                access={access}
+                onAccess={setAccess}
+                similarCount={similarStoreyIds.length}
+                alsoSimilar={alsoSimilar}
+                onAlsoSimilar={setAlsoSimilar}
+                hasOwnPlan={hasOwnPlan}
+                busy={splitBusy}
+                error={splitError}
+                disabled={previewing || usable === null}
+                onGenerate={generateSplit}
+              />
               <PlanChecksPanel
                 storey={storey}
                 issues={storeyPlanIssues}
@@ -877,6 +1038,8 @@ export function App() {
                 layoutError={layoutError}
                 previewing={previewing}
                 onGenerate={generateLayout}
+                onGenerateAll={generateAll}
+                generatingAll={generatingAll}
                 selection={selection}
                 onChange={(s, record) => setStorey(s, record)}
                 onSelect={setSelection}

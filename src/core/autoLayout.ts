@@ -15,6 +15,7 @@
 import {
   type ApartmentInput,
   type Layout,
+  type RoomProgram,
   type RoomType,
   type SubdivisionOptions,
   generateLayouts,
@@ -196,9 +197,12 @@ const ROOM_LABEL: Record<RoomType, { name: string; type: SpaceType }> = {
   living: { name: "Living room", type: "living" },
   bedroom: { name: "Bedroom", type: "bedroom" },
   bathroom: { name: "Bathroom", type: "bathroom" },
+  wc: { name: "WC", type: "bathroom" },
+  kitchen: { name: "Kitchen", type: "kitchen" },
+  storage: { name: "Storage", type: "storage" },
   corridor: { name: "Corridor", type: "corridor" },
 };
-const ROOM_RANK: RoomType[] = ["living", "bedroom", "bathroom", "corridor"];
+const ROOM_RANK: RoomType[] = ["living", "bedroom", "kitchen", "bathroom", "wc", "storage", "corridor"];
 
 const micro = (v: number) => Math.round(v * 1e6) / 1e6;
 
@@ -375,8 +379,17 @@ export function applyLayout(
   );
   if (inApartment.length !== groups.length) return null;
 
+  // Several rooms of one kind are numbered: Bedroom 1, Bedroom 2.
+  const ofKind = new Map<RoomType, number>();
+  for (const g of groups) ofKind.set(labelOfGroup.get(g)!, (ofKind.get(labelOfGroup.get(g)!) ?? 0) + 1);
+  const numbered = new Map<RoomType, number>();
   for (const g of groups) {
-    storey = updateSpace(storey, spaceOfGroup.get(g)!, ROOM_LABEL[labelOfGroup.get(g)!]);
+    const kind = labelOfGroup.get(g)!;
+    const base = ROOM_LABEL[kind];
+    const n = (numbered.get(kind) ?? 0) + 1;
+    numbered.set(kind, n);
+    const name = (ofKind.get(kind) ?? 0) > 1 ? `${base.name} ${n}` : base.name;
+    storey = updateSpace(storey, spaceOfGroup.get(g)!, { ...base, name });
   }
   storey = {
     ...storey,
@@ -430,13 +443,14 @@ export function proposeLayouts(
   rules: LayoutRules,
   options: ApplyOptions,
   count = 3,
+  program?: RoomProgram,
 ): LayoutProposals {
   const built = buildLayoutInput(storey, apartmentId);
   if (!built.ok) return built;
   let layouts: Layout[];
   try {
     // Thickness 0: the engine's rooms then meet on the partition centrelines.
-    layouts = generateLayouts(built.input, { ...rules, wallThickness: 0, kitchen: false }, count);
+    layouts = generateLayouts(built.input, { ...rules, ...(program ? { program } : {}), wallThickness: 0, kitchen: false }, count);
   } catch (e) {
     return { ok: false, reason: e instanceof Error ? e.message : String(e) };
   }
@@ -456,7 +470,9 @@ export function proposeLayouts(
       ok: false,
       reason:
         layouts.length === 0
-          ? "It cannot fit a living room and a bedroom with daylight plus a bathroom."
+          ? program
+            ? "It cannot fit this room programme with daylight in the living room and bedrooms. Try fewer rooms or a larger apartment."
+            : "It cannot fit a living room and a bedroom with daylight plus a bathroom."
           : "The generator found layouts, but none could be drawn as clean walls here.",
     };
   }

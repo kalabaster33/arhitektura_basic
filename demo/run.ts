@@ -66,7 +66,7 @@ function polyArea(poly: Pt[]): number {
   return Math.abs(s / 2);
 }
 
-const CHAR = { living: "L", bedroom: "B", bathroom: "w", corridor: "c" } as const;
+const CHAR = { living: "L", bedroom: "B", bathroom: "w", corridor: "c", wc: "t", kitchen: "K", storage: "s" } as const;
 
 function ascii(input: ApartmentInput, layout: Layout): string {
   const xs = input.polygon.map((p) => p.x), ys = input.polygon.map((p) => p.y);
@@ -87,7 +87,7 @@ function ascii(input: ApartmentInput, layout: Layout): string {
   return lines.join("\n");
 }
 
-const FILL = { living: "#f3e3b8", bedroom: "#c9d9ee", bathroom: "#bfe3dc", corridor: "#e4e0da" } as const;
+const FILL = { living: "#f3e3b8", bedroom: "#c9d9ee", bathroom: "#bfe3dc", wc: "#bfe3dc", kitchen: "#f0d2b4", storage: "#ddd6cc", corridor: "#e4e0da" } as const;
 
 function svg(input: ApartmentInput, layout: Layout): string {
   const xs = input.polygon.map((p) => p.x), ys = input.polygon.map((p) => p.y);

@@ -6,7 +6,10 @@ import {
   createApartment,
   deleteApartment,
   renameApartment,
+  setApartmentProgram,
 } from "../core/apartments.ts";
+import { DEFAULT_PROGRAM } from "../roomSubdivision.ts";
+import { ProgramEditor, describeProgram } from "./StoreyPlanPanel.tsx";
 import {
   type AreaConfig,
   type BuildingAreas,
@@ -482,11 +485,16 @@ export function ApartmentsPanel(props: {
   /** True while a generated layout is being previewed. */
   previewing: boolean;
   onGenerate: (apartmentId: string) => void;
+  /** Lays out every apartment that can be, one after the other. */
+  onGenerateAll: () => void;
+  /** Progress of a run over all apartments, or null. */
+  generatingAll: string | null;
   selection: Selection;
   onChange: (s: Storey, record?: boolean) => void;
   onSelect: (s: Selection) => void;
 }) {
   const { storey, selection, onChange } = props;
+  const ready = storey.apartments.filter((a) => !props.layoutBlockers.has(a.id)).length;
   const selectedRoom =
     selection?.kind === "space" ? storey.spaces.find((s) => s.id === selection.id) : undefined;
   return (
@@ -540,6 +548,16 @@ export function ApartmentsPanel(props: {
                     </>
                   )}
                 </small>
+                <details className="apartments__program">
+                  <summary>
+                    {a.unitType ? `${a.unitType}${a.targetArea ? ` (${formatArea(a.targetArea, props.config)} m² wanted)` : ""} · ` : ""}
+                    {describeProgram(a.program ?? DEFAULT_PROGRAM)}
+                  </summary>
+                  <ProgramEditor
+                    program={a.program ?? DEFAULT_PROGRAM}
+                    onChange={(program) => onChange(setApartmentProgram(storey, a.id, program))}
+                  />
+                </details>
                 {!props.previewing && (
                   <div className="apartments__layout">
                     <button
@@ -560,6 +578,14 @@ export function ApartmentsPanel(props: {
           })}
         </ul>
       )}
+      {storey.apartments.length > 1 && !props.previewing && (
+        <div className="row">
+          <button disabled={ready === 0 || props.generatingAll !== null} onClick={props.onGenerateAll}>
+            {props.generatingAll ?? `Generate rooms in all ${ready} apartment${ready === 1 ? "" : "s"}`}
+          </button>
+        </div>
+      )}
+      {props.layoutError?.apartmentId === "" && <p className="hint is-bad">{props.layoutError.reason}</p>}
       <button
         onClick={() => onChange(createApartment(storey, selectedRoom ? [selectedRoom.id] : []).storey)}
       >
@@ -570,9 +596,10 @@ export function ApartmentsPanel(props: {
         most; rooms in none count as common area.
       </p>
       <p className="hint">
-        Generate layout proposes a living room, a bedroom and a bathroom, with a corridor where
-        needed, and shows up to three options to choose from. It needs an entrance door and an
-        exterior wall, and does not add windows.
+        Generate layout divides an apartment into the rooms set under it — bedrooms, bathrooms,
+        WC, storage and the kitchen — plus a living room and a corridor where needed, and shows up
+        to three options to choose from. It needs an entrance door and an exterior wall, and does
+        not add windows.
       </p>
       <p className="hint hint--warn">
         Room sizes for generated layouts are placeholders — to be verified by a licensed engineer

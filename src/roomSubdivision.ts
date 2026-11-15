@@ -1,14 +1,17 @@
 /**
- * Apartment subdivision: Living Room + Bedroom + Bathroom (+ corridor when
- * needed, + an open-plan kitchen zone inside the living room).
+ * Apartment subdivision: a living room plus a chosen programme of private
+ * rooms — any number of bedrooms, bathrooms, separate WCs and storerooms, and
+ * a separate kitchen or an open-plan kitchen zone inside the living room —
+ * with a corridor where needed.
  *
  * Method: rasterise the apartment onto a facade-aligned grid, enumerate
- * candidates for the two "hard" rooms (bathroom, bedroom) with summed-area
- * tables, derive the living room and corridor from what is left by
- * morphological opening, reject layouts that break a rule and score the rest.
- * The winner is then re-evaluated on a fine grid and its walls nudged one at a
- * time (hill climbing), and finally vectorised: polygons are clipped to the
- * true outline and pulled apart by the partition thickness.
+ * rectangle candidates for every private room with summed-area tables,
+ * combine them by beam search (all combinations when there are only two),
+ * derive the living room and corridor from what is left by morphological
+ * opening, reject layouts that break a rule and score the rest. The winner is
+ * then re-evaluated on a fine grid and its walls nudged one at a time (hill
+ * climbing), and finally vectorised: polygons are clipped to the true outline
+ * and pulled apart by the partition thickness.
  *
  * Units are metres. Edge i of the polygon runs polygon[i] -> polygon[i + 1].
  * The outline is taken as the inner face of the apartment's perimeter walls.
@@ -22,7 +25,40 @@ export interface Pt {
   y: number;
 }
 
-export type RoomType = "living" | "bedroom" | "bathroom" | "corridor";
+export type RoomType = "living" | "bedroom" | "bathroom" | "wc" | "kitchen" | "storage" | "corridor";
+
+/** The rooms an apartment gets besides its living room. */
+export interface RoomProgram {
+  bedrooms: number;
+  bathrooms: number;
+  /** Separate toilets. */
+  wc: number;
+  storage: number;
+  /**
+   * "open": a kitchen zone inside the living room; "separate": a kitchen of
+   * its own with a window; "none": no kitchen is planned.
+   */
+  kitchen: "open" | "separate" | "none";
+}
+
+export const DEFAULT_PROGRAM: RoomProgram = { bedrooms: 1, bathrooms: 1, wc: 0, storage: 0, kitchen: "open" };
+
+/** Largest counts the search is asked to place. */
+export const PROGRAM_LIMITS = { bedrooms: 5, bathrooms: 3, wc: 2, storage: 2 } as const;
+
+/** The programme with every count made a whole number within the limits. */
+export function normalizeProgram(p: Partial<RoomProgram> | undefined): RoomProgram {
+  const count = (v: unknown, lo: number, hi: number, fallback: number) =>
+    typeof v === "number" && Number.isFinite(v) ? Math.max(lo, Math.min(hi, Math.round(v))) : fallback;
+  const d = DEFAULT_PROGRAM;
+  return {
+    bedrooms: count(p?.bedrooms, 0, PROGRAM_LIMITS.bedrooms, d.bedrooms),
+    bathrooms: count(p?.bathrooms, 1, PROGRAM_LIMITS.bathrooms, d.bathrooms),
+    wc: count(p?.wc, 0, PROGRAM_LIMITS.wc, d.wc),
+    storage: count(p?.storage, 0, PROGRAM_LIMITS.storage, d.storage),
+    kitchen: p?.kitchen === "separate" || p?.kitchen === "none" || p?.kitchen === "open" ? p.kitchen : d.kitchen,
+  };
+}
 
 export interface ApartmentInput {
   /** Closed outline, without a repeated last vertex. Either winding. */
@@ -69,6 +105,16 @@ export interface SubdivisionOptions {
   bedroomAreaRange: [number, number];
   bathroomShare: number;
   bathroomAreaRange: [number, number];
+  /** Rooms to place besides the living room. */
+  program: RoomProgram;
+  /** Target areas of the rooms after the first bedroom and the first bathroom, and of the others. */
+  secondBedroomArea: number;
+  secondBathroomArea: number;
+  wcArea: number;
+  kitchenArea: number;
+  storageArea: number;
+  /** Window length a separate kitchen must have. */
+  minKitchenFacade: number;
   /** Search width: how many candidates of each kind are combined. */
   bedroomCandidates: number;
   bathroomCandidates: number;
@@ -99,6 +145,13 @@ export const DEFAULT_OPTIONS: SubdivisionOptions = {
   bedroomAreaRange: [9, 16],
   bathroomShare: 0.08,
   bathroomAreaRange: [3.5, 6],
+  program: DEFAULT_PROGRAM,
+  secondBedroomArea: 10,
+  secondBathroomArea: 3.8,
+  wcArea: 1.6,
+  kitchenArea: 7,
+  storageArea: 2,
+  minKitchenFacade: 1.2,
   bedroomCandidates: 80,
   bathroomCandidates: 40,
   kitchen: true,
@@ -163,7 +216,7 @@ export function subdivideApartment(
   const layouts = generateLayouts(input, options, 1);
   if (layouts.length === 0) {
     throw new Error(
-      "No valid layout: the outline cannot fit a lit living room, a lit bedroom and a bathroom.",
+      "No valid layout: the outline cannot fit the programme with daylight in the living room and bedrooms.",
     );
   }
   return layouts[0];
@@ -176,6 +229,7 @@ export function generateLayouts(
   count = 3,
 ): Layout[] {
   const opts = { ...DEFAULT_OPTIONS, ...options };
+  opts.program = normalizeProgram(opts.program);
   if (input.polygon.length < 3) throw new Error("Polygon needs at least 3 vertices.");
   if (input.facadeEdges.length === 0) throw new Error("At least one facade edge is required.");
 
@@ -306,9 +360,10 @@ function largest(mp: MultiPoly): Poly | null {
 const OUT = -1;
 const FREE = 0;
 const LIVING = 1;
-const BATH = 2;
-const BED = 3;
-const CORRIDOR0 = 4;
+/** Private rooms take the labels from here on, then the corridors (Params.corridor0). */
+const PRIVATE0 = 2;
+/** Two labels packed into one key; labels stay well below this. */
+const KEY = 1024;
 const PAD = 2; // empty margin, needed when rooms are grown out to the true outline
 
 interface Grid {
@@ -581,36 +636,123 @@ function maskOf(lab: Int16Array, value: number): Uint8Array {
 
 // ---------------------------------------------------------------- candidates
 
+type PrivateKind = "bedroom" | "bathroom" | "wc" | "kitchen" | "storage";
+
+/** One private room of the programme: everything but the living room and corridors. */
+interface Private {
+  kind: PrivateKind;
+  /** Its label on the grid. */
+  label: number;
+  /** Id of the room in the layout. */
+  id: string;
+  target: number;
+  spec: RoomSpec;
+  /** Rooms with the same group share one candidate list. */
+  group: number;
+}
+
 interface Params {
   kLiving: number;
   kCorridor: number;
   doorCells: number;
   minCorridorCells: number;
   minLivingFacade: number;
-  minBedroomFacade: number;
   minLivingArea: number;
-  bedTarget: number;
-  bathTarget: number;
-  minBedroomSide: number;
+  privates: Private[];
+  /** First corridor label. */
+  corridor0: number;
   opts: SubdivisionOptions;
 }
 
 const cellsFor = (g: Grid, m: number) => Math.max(1, Math.ceil(m / g.cell - 1e-9));
 
+const isWet = (k: PrivateKind) => k === "bathroom" || k === "wc";
+
 function deriveParams(g: Grid, opts: SubdivisionOptions, relax: number): Params {
   const area = g.insideCells * g.cell * g.cell;
   const clamp = (v: number, [lo, hi]: [number, number]) => Math.max(lo, Math.min(hi, v));
+  const prog = opts.program;
+  const shrink = relax < 1 ? relax : 1;
+
+  const specFor = (kind: PrivateKind, target: number, first: boolean): RoomSpec => {
+    switch (kind) {
+      case "bedroom":
+        return {
+          minSide: opts.minBedroomSide * relax,
+          maxSide: 5.5,
+          minArea: 0.8 * target,
+          maxArea: 1.25 * target,
+          maxAspect: opts.maxBedroomAspect,
+          minFacade: opts.minBedroomFacade * relax,
+        };
+      case "bathroom":
+        return {
+          minSide: first ? 1.5 : 1.4,
+          maxSide: 3.0,
+          minArea: Math.max(first ? 3 : 2.6, 0.8 * target),
+          maxArea: 1.4 * target,
+          maxAspect: opts.maxBathroomAspect,
+          minFacade: 0,
+        };
+      case "wc":
+        return { minSide: 1.0, maxSide: 2.2, minArea: 0.75 * target, maxArea: 1.5 * target, maxAspect: 2.5, minFacade: 0 };
+      case "kitchen":
+        return {
+          minSide: 2.0 * relax,
+          maxSide: 4.5,
+          minArea: 0.8 * target,
+          maxArea: 1.4 * target,
+          maxAspect: 2.2,
+          minFacade: opts.minKitchenFacade * relax,
+        };
+      case "storage":
+        return { minSide: 1.0, maxSide: 2.5, minArea: 0.6 * target, maxArea: 1.5 * target, maxAspect: 2.5, minFacade: 0 };
+    }
+  };
+
+  const privates: Private[] = [];
+  let group = 0;
+  const add = (kind: PrivateKind, count: number, targetOf: (i: number) => number) => {
+    let lastTarget = NaN;
+    for (let i = 0; i < count; i++) {
+      const target = targetOf(i);
+      if (target !== lastTarget) group++;
+      lastTarget = target;
+      privates.push({
+        kind,
+        label: PRIVATE0 + privates.length,
+        id: count > 1 ? `${kind}-${i + 1}` : kind,
+        target,
+        spec: specFor(kind, target, i === 0),
+        group,
+      });
+    }
+  };
+  // The hardest rooms first: they narrow the search most.
+  add("bedroom", prog.bedrooms, (i) =>
+    (i === 0 ? clamp(opts.bedroomShare * area, opts.bedroomAreaRange) : opts.secondBedroomArea) * shrink,
+  );
+  add("kitchen", prog.kitchen === "separate" ? 1 : 0, () => opts.kitchenArea);
+  add("bathroom", prog.bathrooms, (i) =>
+    i === 0 ? clamp(opts.bathroomShare * area, opts.bathroomAreaRange) : opts.secondBathroomArea,
+  );
+  add("wc", prog.wc, () => opts.wcArea);
+  add("storage", prog.storage, () => opts.storageArea);
+
+  // The living room is what the private rooms leave: at least 30 % of the
+  // apartment, unless the programme cannot leave that much.
+  const claimed = privates.reduce((s, p) => s + p.target, 0);
+  const minLivingArea = Math.min(0.3 * area, Math.max(12, area - 1.15 * claimed - 0.06 * area)) * relax;
+
   return {
     kLiving: cellsFor(g, opts.minLivingWidth * relax),
     kCorridor: cellsFor(g, opts.corridorWidth),
     doorCells: cellsFor(g, opts.doorWidth),
     minCorridorCells: Math.ceil(opts.minCorridorArea / (g.cell * g.cell)),
     minLivingFacade: opts.minLivingFacade * relax,
-    minBedroomFacade: opts.minBedroomFacade * relax,
-    minLivingArea: 0.3 * area * relax,
-    bedTarget: clamp(opts.bedroomShare * area, opts.bedroomAreaRange) * (relax < 1 ? relax : 1),
-    bathTarget: clamp(opts.bathroomShare * area, opts.bathroomAreaRange),
-    minBedroomSide: opts.minBedroomSide * relax,
+    minLivingArea,
+    privates,
+    corridor0: PRIVATE0 + privates.length,
     opts,
   };
 }
@@ -641,28 +783,6 @@ interface RoomSpec {
   maxArea: number;
   maxAspect: number;
   minFacade: number;
-}
-
-function bathSpec(p: Params): RoomSpec {
-  return {
-    minSide: 1.5,
-    maxSide: 3.0,
-    minArea: Math.max(3, 0.8 * p.bathTarget),
-    maxArea: 1.4 * p.bathTarget,
-    maxAspect: p.opts.maxBathroomAspect,
-    minFacade: 0,
-  };
-}
-
-function bedSpec(p: Params): RoomSpec {
-  return {
-    minSide: p.minBedroomSide,
-    maxSide: 5.5,
-    minArea: 0.8 * p.bedTarget,
-    maxArea: 1.25 * p.bedTarget,
-    maxAspect: p.opts.maxBedroomAspect,
-    minFacade: p.minBedroomFacade,
-  };
 }
 
 /** Box clamped to the grid and shrunk until every side touches an inside cell. */
@@ -790,37 +910,41 @@ function rectCentre(g: Grid, r: Rect): Pt {
   return { x: g.ox + (r.x0 + r.w / 2) * g.cell, y: g.oy + (r.y0 + r.h / 2) * g.cell };
 }
 
-function bathroomCandidates(g: Grid, p: Params): Rect[] {
-  const t = p.bathTarget;
-  const spec = bathSpec(p);
-  const all = enumerateRects(g, spec, (r) => {
+/** Shortlist of places for one private room, best first. */
+function privateCandidates(g: Grid, p: Params, pr: Private): Rect[] {
+  const t = pr.target;
+  const spec = pr.spec;
+  const cost = (r: Rect): number => {
     const perim = 2 * (r.w + r.h);
     const a = r.cells * g.cell * g.cell;
     const c = rectCentre(g, r);
-    return (
-      2 * (Math.abs(a - t) / t) +
-      3 * (r.fac / perim) - // do not spend facade on a wet room
-      1.5 * (r.wall / perim) + // tuck it against existing walls
-      1.5 * (dist(c, g.entrance) / g.diag) +
-      (g.stack ? 3 * (dist(c, g.stack) / g.diag) : 0)
-    );
-  });
-  return diverseTop(all, p.opts.bathroomCandidates, 0.6, (r) => shapeOk(g, spec, r));
-}
-
-function bedroomCandidates(g: Grid, p: Params): Rect[] {
-  const t = p.bedTarget;
-  const spec = bedSpec(p);
-  const all = enumerateRects(g, spec, (r) => {
-    const perim = 2 * (r.w + r.h);
-    const a = r.cells * g.cell * g.cell;
-    return (
-      2 * (Math.abs(a - t) / t) -
-      1.5 * (r.wall / perim) +
-      0.3 * (Math.max(r.w, r.h) / Math.min(r.w, r.h) - 1)
-    );
-  });
-  return diverseTop(all, p.opts.bedroomCandidates, 0.7, (r) => shapeOk(g, spec, r));
+    const aspect = Math.max(r.w, r.h) / Math.min(r.w, r.h) - 1;
+    switch (pr.kind) {
+      case "bathroom":
+      case "wc":
+        return (
+          2 * (Math.abs(a - t) / t) +
+          3 * (r.fac / perim) - // do not spend facade on a wet room
+          1.5 * (r.wall / perim) + // tuck it against existing walls
+          1.5 * (dist(c, g.entrance) / g.diag) +
+          (g.stack ? 3 * (dist(c, g.stack) / g.diag) : 0)
+        );
+      case "storage":
+        return 2 * (Math.abs(a - t) / t) + 3 * (r.fac / perim) - 1.5 * (r.wall / perim);
+      case "bedroom":
+        return 2 * (Math.abs(a - t) / t) - 1.5 * (r.wall / perim) + 0.3 * aspect;
+      case "kitchen":
+        return 2 * (Math.abs(a - t) / t) - 1.0 * (r.wall / perim) + 0.3 * aspect + 1.0 * (dist(c, g.entrance) / g.diag);
+    }
+  };
+  const all = enumerateRects(g, spec, cost);
+  const wide = pr.kind === "bedroom" || pr.kind === "kitchen";
+  return diverseTop(
+    all,
+    wide ? p.opts.bedroomCandidates : p.opts.bathroomCandidates,
+    wide ? 0.7 : 0.6,
+    (r) => shapeOk(g, spec, r),
+  );
 }
 
 // ---------------------------------------------------------------- evaluation
@@ -847,8 +971,8 @@ interface Evaluated {
   lab: Int16Array;
   labelCount: number;
   links: DoorLink[];
-  bath: Rect;
-  bed: Rect;
+  /** One per private room, in the order of Params.privates. */
+  rects: Rect[];
 }
 
 function sharedRuns(g: Grid, lab: Int16Array): Map<number, Run> {
@@ -858,12 +982,12 @@ function sharedRuns(g: Grid, lab: Int16Array): Map<number, Run> {
     const a = lab[i];
     const b = lab[j];
     if (a <= 0 || b <= 0 || a === b) return -1;
-    return a < b ? a * 64 + b : b * 64 + a;
+    return a < b ? a * KEY + b : b * KEY + a;
   };
   const record = (key: number, vertical: boolean, line: number, s: number, e: number) => {
     const prev = best.get(key);
     if (!prev || e - s > prev.len) {
-      best.set(key, { a: Math.floor(key / 64), b: key % 64, len: e - s, vertical, line, s, e });
+      best.set(key, { a: Math.floor(key / KEY), b: key % KEY, len: e - s, vertical, line, s, e });
     }
   };
   for (let x = 1; x < nx; x++) {
@@ -893,24 +1017,27 @@ function sharedRuns(g: Grid, lab: Int16Array): Map<number, Run> {
   return best;
 }
 
+/** Weight of a room's area error in the cost. */
+const AREA_WEIGHT: Record<PrivateKind, number> = { bedroom: 2.0, bathroom: 1.0, wc: 1.0, kitchen: 1.5, storage: 0.5 };
+
 /**
- * Completes a layout from a bathroom and a bedroom candidate, checks every
- * hard rule and returns its cost, or null when a rule is broken.
+ * Completes a layout from one candidate per private room, checks every hard
+ * rule and returns its cost, or null when a rule is broken.
  */
-function evaluate(g: Grid, p: Params, bath: Rect, bed: Rect): Evaluated | null {
-  if (rectIoU(bath, bed) > 0) return null;
+function evaluate(g: Grid, p: Params, rects: Rect[]): Evaluated | null {
+  for (let i = 0; i < rects.length; i++) {
+    for (let j = i + 1; j < rects.length; j++) if (rectIoU(rects[i], rects[j]) > 0) return null;
+  }
   const { nx, cell } = g;
   const lab = g.base.slice();
-  for (const [r, v] of [
-    [bath, BATH],
-    [bed, BED],
-  ] as const) {
+  rects.forEach((r, k) => {
+    const v = p.privates[k].label;
     for (let y = r.y0; y < r.y0 + r.h; y++) {
       for (let x = r.x0; x < r.x0 + r.w; x++) {
         if (lab[y * nx + x] === FREE) lab[y * nx + x] = v;
       }
     }
-  }
+  });
 
   // Living room: the part of the remainder that is at least minLivingWidth wide everywhere.
   let living: number[] | null = null;
@@ -924,7 +1051,7 @@ function evaluate(g: Grid, p: Params, bath: Rect, bed: Rect): Evaluated | null {
   for (const i of living) lab[i] = LIVING;
 
   // Corridors: what is left but still wide enough to walk through.
-  let next = CORRIDOR0;
+  let next = p.corridor0;
   let corridorCells = 0;
   for (const comp of components(g, opening(g, maskOf(lab, FREE), p.kCorridor))) {
     if (comp.length < p.minCorridorCells) continue;
@@ -932,6 +1059,7 @@ function evaluate(g: Grid, p: Params, bath: Rect, bed: Rect): Evaluated | null {
     corridorCells += comp.length;
     next++;
   }
+  if (next >= KEY) return null;
 
   // Slivers: too narrow for anything, merged into the room they touch most.
   let sliverCells = 0;
@@ -962,13 +1090,12 @@ function evaluate(g: Grid, p: Params, bath: Rect, bed: Rect): Evaluated | null {
   // A corridor earns its place only if it holds the entrance or is the sole way
   // into a private room. Anything else is just an alcove of the living room.
   let runs = sharedRuns(g, lab);
-  const runBetween = (a: number, b: number) => runs.get(a < b ? a * 64 + b : b * 64 + a);
+  const runBetween = (a: number, b: number) => runs.get(a < b ? a * KEY + b : b * KEY + a);
   const fits = (a: number, b: number) => (runBetween(a, b)?.len ?? 0) >= p.doorCells;
   const start = lab[g.entranceIdx];
   const dropped = new Set<number>();
-  for (let v = CORRIDOR0; v < next; v++) {
-    const needed =
-      v === start || [BATH, BED].some((priv) => fits(priv, v) && !fits(priv, LIVING));
+  for (let v = p.corridor0; v < next; v++) {
+    const needed = v === start || p.privates.some((pr) => fits(pr.label, v) && !fits(pr.label, LIVING));
     if (!needed && fits(v, LIVING)) dropped.add(v);
   }
   let alcoveCells = 0;
@@ -1011,15 +1138,15 @@ function evaluate(g: Grid, p: Params, bath: Rect, bed: Rect): Evaluated | null {
   const c2 = cell * cell;
   const total = g.insideCells * c2;
   const livA = count[LIVING] * c2;
-  const bedA = count[BED] * c2;
-  const bathA = count[BATH] * c2;
   if (livA < p.minLivingArea) return null;
-  if (fac[BED] * cell < p.minBedroomFacade - 1e-9) return null;
+  for (const pr of p.privates) {
+    if (pr.spec.minFacade > 0 && fac[pr.label] * cell < pr.spec.minFacade - 1e-9) return null;
+  }
 
   // Connectivity. Circulation runs through "public" rooms only (living, corridors);
-  // the bedroom and the bathroom must each open onto a public room reachable
-  // from the entrance, so nobody crosses a private room to get anywhere.
-  const isPublic = (v: number) => v === LIVING || v >= CORRIDOR0;
+  // every private room must open onto a public room reachable from the
+  // entrance, so nobody crosses a private room to get anywhere.
+  const isPublic = (v: number) => v === LIVING || v >= p.corridor0;
   if (!isPublic(start)) return null;
   const reached = new Set<number>([start]);
   const links: DoorLink[] = [];
@@ -1037,24 +1164,30 @@ function evaluate(g: Grid, p: Params, bath: Rect, bed: Rect): Evaluated | null {
   }
   if (!reached.has(LIVING)) return null;
   let corridorFacade = 0;
-  for (let v = CORRIDOR0; v < next; v++) {
+  for (let v = p.corridor0; v < next; v++) {
     if (dropped.has(v)) continue;
     if (!reached.has(v)) return null;
     corridorFacade += fac[v] * cell;
   }
-  for (const priv of [BATH, BED]) {
+  let kitchenOffLiving = false;
+  for (const pr of p.privates) {
     let bestRun: Run | undefined;
     let bestW = 0;
+    let bestPub = 0;
     for (const pub of reached) {
-      const run = runBetween(priv, pub);
+      const run = runBetween(pr.label, pub);
       if (!run || run.len < p.doorCells) continue;
-      const w = run.len * (pub >= CORRIDOR0 ? 2 : 1); // a door off the hall beats one off the living room
+      // A door off the hall beats one off the living room; a kitchen wants the living room.
+      const preferred = pr.kind === "kitchen" ? pub === LIVING : pub >= p.corridor0;
+      const w = run.len * (preferred ? 2 : 1);
       if (w > bestW) {
         bestW = w;
         bestRun = run;
+        bestPub = pub;
       }
     }
     if (!bestRun) return null;
+    if (pr.kind === "kitchen" && bestPub !== LIVING) kitchenOffLiving = true;
     links.push({ kind: "door", run: bestRun });
   }
 
@@ -1063,12 +1196,9 @@ function evaluate(g: Grid, p: Params, bath: Rect, bed: Rect): Evaluated | null {
     x: g.ox + (sx[v] / count[v]) * cell,
     y: g.oy + (sy[v] / count[v]) * cell,
   });
-  const bathC = centre(BATH);
   const livBox = (lx1 - lx0) * (ly1 - ly0);
   const livAspect = Math.max(lx1 - lx0, ly1 - ly0) / Math.min(lx1 - lx0, ly1 - ly0);
-  const cost =
-    2.0 * (Math.abs(bedA - p.bedTarget) / p.bedTarget) +
-    1.0 * (Math.abs(bathA - p.bathTarget) / p.bathTarget) +
+  let cost =
     8.0 * ((corridorCells * c2) / total) + // circulation is wasted area
     0.4 * corridorFacade + // daylight belongs to rooms, not to circulation
     6.0 * ((sliverCells * c2) / total) + // slivers mean awkward room shapes
@@ -1076,48 +1206,107 @@ function evaluate(g: Grid, p: Params, bath: Rect, bed: Rect): Evaluated | null {
     3.0 * (1 - count[LIVING] / livBox) + // living room close to a rectangle
     1.0 * Math.max(0, livAspect - 1.8) +
     0.1 * Math.max(0, cornerCount(g, lab, LIVING) - 2) + // every extra corner is a jog in a wall
-    0.15 * Math.max(0, cornerCount(g, lab, BED) - 3) +
-    4.0 * (Math.max(0, 1.3 * bedA - livA) / total) + // living is the largest room
     1.5 * Math.max(0, 1 - (fac[LIVING] * cell) / 3.5) +
-    1.0 * Math.max(0, 1 - (fac[BED] * cell) / 2.5) +
-    3.0 * (fac[BATH] / (2 * (bath.w + bath.h))) + // bathroom stays off the facade
-    1.5 * (dist(bathC, g.entrance) / g.diag) + // ... and near the entrance
-    (g.stack ? 3.0 * (dist(bathC, g.stack) / g.diag) : 0) +
-    -0.75 * (dist(centre(BED), g.entrance) / g.diag) + // bedroom away from the door
-    -1.0 * (bath.wall / (2 * (bath.w + bath.h))) +
-    -0.5 * (bed.wall / (2 * (bed.w + bed.h)));
+    (kitchenOffLiving ? 1.0 : 0);
+  const bedrooms = p.privates.filter((pr) => pr.kind === "bedroom");
+  const wet: Pt[] = [];
+  p.privates.forEach((pr, k) => {
+    const v = pr.label;
+    const r = rects[k];
+    const perim = 2 * (r.w + r.h);
+    const a = count[v] * c2;
+    cost += AREA_WEIGHT[pr.kind] * (Math.abs(a - pr.target) / pr.target);
+    switch (pr.kind) {
+      case "bedroom":
+        cost +=
+          0.15 * Math.max(0, cornerCount(g, lab, v) - 3) +
+          4.0 * (Math.max(0, 1.3 * a - livA) / total) + // living is the largest room
+          1.0 * Math.max(0, 1 - (fac[v] * cell) / 2.5) +
+          (-0.75 * (dist(centre(v), g.entrance) / g.diag)) / bedrooms.length + // bedrooms away from the door
+          -0.5 * (r.wall / perim);
+        break;
+      case "bathroom":
+      case "wc": {
+        const c = centre(v);
+        wet.push(c);
+        cost +=
+          3.0 * (fac[v] / perim) + // wet rooms stay off the facade
+          1.5 * (dist(c, g.entrance) / g.diag) + // ... and near the entrance
+          (g.stack ? 3.0 * (dist(c, g.stack) / g.diag) : 0) +
+          -1.0 * (r.wall / perim);
+        break;
+      }
+      case "kitchen":
+        cost += 0.15 * Math.max(0, cornerCount(g, lab, v) - 3) + 1.0 * Math.max(0, 1 - (fac[v] * cell) / 1.8);
+        break;
+      case "storage":
+        cost += 2.0 * (fac[v] / perim);
+        break;
+    }
+  });
+  // Wet rooms together share their pipes.
+  for (let i = 1; i < wet.length; i++) cost += 1.0 * (dist(wet[i], wet[0]) / g.diag);
 
-  return { cost, lab, labelCount: next, links, bath, bed };
+  return { cost, lab, labelCount: next, links, rects };
 }
 
+/** Partial layouts kept between steps of the beam search, and how many complete ones are scored. */
+const BEAM = 600;
+const FINAL_BEAM = 3200;
+
 function search(g: Grid, p: Params, count: number): Evaluated[] {
-  const baths = bathroomCandidates(g, p);
-  const beds = bedroomCandidates(g, p);
-  const scored: { cost: number; bath: Rect; bed: Rect }[] = [];
-  for (const bath of baths) {
-    for (const bed of beds) {
-      const ev = evaluate(g, p, bath, bed);
-      if (ev) scored.push({ cost: ev.cost, bath, bed });
+  const lists = new Map<number, Rect[]>();
+  for (const pr of p.privates) {
+    if (!lists.has(pr.group)) lists.set(pr.group, privateCandidates(g, p, pr));
+  }
+
+  // Beam search: the private rooms are placed one at a time, each from its
+  // shortlist, keeping the cheapest combinations. With two rooms the beam
+  // holds every combination, so nothing is lost. Rooms of one group take
+  // their candidates in list order, so the same set is not tried twice.
+  interface State {
+    rects: Rect[];
+    idx: number[];
+    cost: number;
+  }
+  let states: State[] = [{ rects: [], idx: [], cost: 0 }];
+  p.privates.forEach((pr, k) => {
+    const list = lists.get(pr.group)!;
+    const sameAsPrev = k > 0 && p.privates[k - 1].group === pr.group;
+    const next: State[] = [];
+    for (const s of states) {
+      for (let j = sameAsPrev ? s.idx[k - 1] + 1 : 0; j < list.length; j++) {
+        const r = list[j];
+        if (s.rects.some((q) => rectIoU(q, r) > 0)) continue;
+        next.push({ rects: [...s.rects, r], idx: [...s.idx, j], cost: s.cost + r.cost });
+      }
     }
+    next.sort((a, b) => a.cost - b.cost);
+    const cap = k === p.privates.length - 1 ? FINAL_BEAM : BEAM;
+    states = next.length > cap ? next.slice(0, cap) : next;
+  });
+
+  const scored: { cost: number; rects: Rect[] }[] = [];
+  for (const s of states) {
+    const ev = evaluate(g, p, s.rects);
+    if (ev) scored.push({ cost: ev.cost, rects: s.rects });
   }
   scored.sort((a, b) => a.cost - b.cost);
   const picked: typeof scored = [];
   for (const s of scored) {
     if (picked.length >= count) break;
-    const distinct = picked.every(
-      (q) => rectIoU(q.bed, s.bed) < 0.6 || rectIoU(q.bath, s.bath) < 0.6,
-    );
+    const distinct = picked.every((q) => q.rects.length === 0 || q.rects.some((r, k) => rectIoU(r, s.rects[k]) < 0.6));
     if (distinct) picked.push(s);
   }
-  return picked.map((s) => evaluate(g, p, s.bath, s.bed)!);
+  return picked.map((s) => evaluate(g, p, s.rects)!);
 }
 
 // ---------------------------------------------------------------- refinement
 
 /**
- * Re-evaluates a coarse layout on the fine grid, then moves one wall of the
- * bathroom or bedroom at a time, keeping every move that lowers the cost.
- * This takes wall positions off the coarse search module.
+ * Re-evaluates a coarse layout on the fine grid, then moves one wall of one
+ * private room at a time, keeping every move that lowers the cost. This takes
+ * wall positions off the coarse search module.
  */
 function refine(g: Grid, p: Params, coarse: Evaluated, ratio: number): Evaluated | null {
   const up = (r: Rect) =>
@@ -1128,11 +1317,13 @@ function refine(g: Grid, p: Params, coarse: Evaluated, ratio: number): Evaluated
       (r.x0 + r.w - PAD) * ratio + PAD,
       (r.y0 + r.h - PAD) * ratio + PAD,
     );
-  const specs = { bath: bathSpec(p), bed: bedSpec(p) };
-  const bath0 = up(coarse.bath);
-  const bed0 = up(coarse.bed);
-  if (!bath0 || !bed0) return null;
-  let cur = evaluate(g, p, bath0, bed0);
+  const start: Rect[] = [];
+  for (const r of coarse.rects) {
+    const fine = up(r);
+    if (!fine) return null;
+    start.push(fine);
+  }
+  let cur = evaluate(g, p, start);
   if (!cur) return null;
 
   const moves: [number, number, number, number][] = [
@@ -1145,10 +1336,11 @@ function refine(g: Grid, p: Params, coarse: Evaluated, ratio: number): Evaluated
     let improved = true;
     for (let sweep = 0; improved && sweep < 12; sweep++) {
       improved = false;
-      for (const which of ["bath", "bed"] as const) {
+      for (let k = 0; k < p.privates.length; k++) {
+        const spec = p.privates[k].spec;
         for (const [a, b, c, d] of moves) {
           for (const dir of [-step, step]) {
-            const r: Rect = which === "bath" ? cur.bath : cur.bed;
+            const r: Rect = cur.rects[k];
             const moved = fitRect(
               g,
               r.x0 + a * dir,
@@ -1158,9 +1350,10 @@ function refine(g: Grid, p: Params, coarse: Evaluated, ratio: number): Evaluated
             );
             if (!moved) continue;
             if (moved.x0 === r.x0 && moved.y0 === r.y0 && moved.w === r.w && moved.h === r.h) continue;
-            if (!rectValid(g, specs[which], moved) || !shapeOk(g, specs[which], moved)) continue;
-            const ev: Evaluated | null =
-              which === "bath" ? evaluate(g, p, moved, cur.bed) : evaluate(g, p, cur.bath, moved);
+            if (!rectValid(g, spec, moved) || !shapeOk(g, spec, moved)) continue;
+            const rects = cur.rects.slice();
+            rects[k] = moved;
+            const ev: Evaluated | null = evaluate(g, p, rects);
             if (ev && ev.cost < cur.cost - 1e-6) {
               cur = ev;
               improved = true;
@@ -1199,8 +1392,8 @@ function placeKitchen(g: Grid, p: Params, lab: Int16Array, doorPts: Pt[]): Kitch
   for (let i = 0; i < n; i++) {
     const v = lab[i];
     if (v === LIVING) living[i] = 1;
-    if (v === OUT || v === BATH || v === BED) solid[i] = 1;
-    if (v === BATH) bath[i] = 1;
+    if (v === OUT || (v >= PRIVATE0 && v < p.corridor0)) solid[i] = 1;
+    if (v >= PRIVATE0 && v < p.corridor0 && isWet(p.privates[v - PRIVATE0].kind)) bath[i] = 1;
     if (g.clear[i]) block[i] = 1;
   }
   const reach = Math.ceil(1.0 / cell);
@@ -1278,17 +1471,15 @@ function placeKitchen(g: Grid, p: Params, lab: Int16Array, doorPts: Pt[]): Kitch
 
 // ------------------------------------------------------------- vectorisation
 
-function roomId(label: number): string {
+function roomId(p: Params, label: number): string {
   if (label === LIVING) return "living";
-  if (label === BATH) return "bathroom";
-  if (label === BED) return "bedroom";
-  return `corridor-${label - CORRIDOR0 + 1}`;
+  if (label < p.corridor0) return p.privates[label - PRIVATE0].id;
+  return `corridor-${label - p.corridor0 + 1}`;
 }
 
-function roomType(label: number): RoomType {
+function roomType(p: Params, label: number): RoomType {
   if (label === LIVING) return "living";
-  if (label === BATH) return "bathroom";
-  if (label === BED) return "bedroom";
+  if (label < p.corridor0) return p.privates[label - PRIVATE0].kind;
   return "corridor";
 }
 
@@ -1398,8 +1589,8 @@ function toLayout(
     let facCells = 0;
     for (let i = 0; i < ev.lab.length; i++) if (ev.lab[i] === label) facCells += g.facEdges[i];
     rooms.push({
-      id: roomId(label),
-      type: roomType(label),
+      id: roomId(p, label),
+      type: roomType(p, label),
       polygon: ringToWorld(main[0]),
       holes: main.slice(1).map(ringToWorld),
       area: polyArea(main),
@@ -1413,7 +1604,7 @@ function toLayout(
   const doors: Door[] = [
     {
       kind: "entrance",
-      rooms: [roomId(ev.lab[g.entranceIdx])],
+      rooms: [roomId(p, ev.lab[g.entranceIdx])],
       position: input.entrance,
       width: doorWidth,
     },
@@ -1452,7 +1643,7 @@ function toLayout(
     }
     doors.push({
       kind,
-      rooms: [roomId(run.a), roomId(run.b)],
+      rooms: [roomId(p, run.a), roomId(p, run.b)],
       position: toWorld(pos.x, pos.y),
       width,
     });
@@ -1470,7 +1661,7 @@ function toLayout(
 
   const zones: Zone[] = [];
   const livingNet = net.get(LIVING);
-  if (p.opts.kitchen && livingNet) {
+  if (p.opts.kitchen && p.opts.program.kitchen === "open" && livingNet) {
     const placed = placeKitchen(g, p, ev.lab, [...doorPts, g.entrance]);
     if (placed) {
       const cut = ([x0, y0, x1, y1]: Box) =>

@@ -74,10 +74,26 @@ export interface Space {
   wallIds: string[];
 }
 
+/** The rooms an apartment is to get besides its living room (see roomSubdivision.ts). */
+export interface ApartmentProgram {
+  bedrooms: number;
+  bathrooms: number;
+  /** Separate toilets. */
+  wc: number;
+  storage: number;
+  kitchen: "open" | "separate" | "none";
+}
+
 export interface Apartment {
   id: string;
   name: string;
   spaceIds: string[];
+  /** Rooms the layout generator plans for it; one bedroom and one bathroom when absent. */
+  program?: ApartmentProgram;
+  /** The apartment type it was generated as, e.g. "Two-bedroom". */
+  unitType?: string;
+  /** Floor area it was generated for, to wall centrelines. */
+  targetArea?: number;
 }
 
 export type CirculationKind = "stair" | "elevator" | "shaft" | "corridor";

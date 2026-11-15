@@ -1404,3 +1404,88 @@ input.is-invalid {
   align-items: center;
   gap: 6px;
 }
+
+/* ------------------------------------------------------------ storey plan */
+
+.mix {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+}
+
+.mix li {
+  padding: 6px 0;
+  border-bottom: 1px solid #eeece6;
+}
+
+.mix__head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 76px 58px 28px;
+  align-items: center;
+  gap: 6px;
+}
+
+.mix__head input {
+  width: 100%;
+  min-width: 0;
+}
+
+.mix__head > button {
+  padding: 0;
+}
+
+.mix__num {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.mix__num em {
+  font-style: normal;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.mix__rooms summary,
+.apartments__program summary {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.program {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px 6px;
+  margin-top: 6px;
+}
+
+.program__count,
+.program__kitchen {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.program__count input {
+  width: 100%;
+  min-width: 0;
+}
+
+.program__kitchen {
+  grid-column: 1 / -1;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.apartments__program {
+  grid-column: 2 / -1;
+}

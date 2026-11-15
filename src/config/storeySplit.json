@@ -1,0 +1,17 @@
+{
+  "_status": "TO BE VERIFIED BY A LICENSED ENGINEER. These sizes are neutral starting values for the storey generator, not taken from any standard or building code. Check them against the rules that apply to the project.",
+  "_doc": "Rules the storey generator works to when it divides the floor left around the hall, stairs and elevator into apartments. Lengths in metres, areas in square metres measured to wall centrelines. cellSize: module the walls between apartments are placed on. corridorWidth: clear width of a common corridor run out from the hall when the hall alone cannot reach every apartment. partyWallThickness: thickness of the walls between apartments and along the corridor. minApartmentWidth: narrowest acceptable apartment. minApartmentFacade: exterior wall length every apartment must have. entranceRun: straight stretch of hall or corridor wall an apartment needs for its entrance door. entranceDoor: size of the apartment entrance doors. unitTypes: the apartment types offered at the start, with their room programmes.",
+  "cellSize": 0.1,
+  "corridorWidth": 1.5,
+  "partyWallThickness": 0.2,
+  "minApartmentWidth": 3.5,
+  "minApartmentFacade": 3.0,
+  "entranceRun": 1.3,
+  "entranceDoor": { "width": 1.0, "height": 2.1 },
+  "unitTypes": [
+    { "name": "Studio", "area": 32, "count": 0, "program": { "bedrooms": 0, "bathrooms": 1, "wc": 0, "storage": 0, "kitchen": "open" } },
+    { "name": "One-bedroom", "area": 50, "count": 2, "program": { "bedrooms": 1, "bathrooms": 1, "wc": 0, "storage": 0, "kitchen": "open" } },
+    { "name": "Two-bedroom", "area": 68, "count": 2, "program": { "bedrooms": 2, "bathrooms": 1, "wc": 0, "storage": 1, "kitchen": "open" } },
+    { "name": "Three-bedroom", "area": 88, "count": 0, "program": { "bedrooms": 3, "bathrooms": 2, "wc": 0, "storage": 0, "kitchen": "separate" } }
+  ]
+}
