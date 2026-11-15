@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import layoutRules from "../config/layoutRules.json";
 import { type AdjacencyRule, type Layout, generateLayouts } from "../roomSubdivision.ts";
-import { parseLayoutRules } from "./autoLayout.ts";
+import { parseLayoutRules, resolveLayoutRules, rulesDoc } from "./autoLayout.ts";
+import { createProject, parseProject, serializeProject } from "./project.ts";
 
 const rules = parseLayoutRules(layoutRules);
 
@@ -92,5 +93,43 @@ describe("layout rules", { timeout: 30000 }, () => {
     for (const room of layout.rooms.filter((r) => r.type === "bedroom")) {
       expect(doorOf(layout, room.id).map((id) => typeOf(layout, id))).not.toContain("living");
     }
+  });
+});
+
+describe("project layout rules", () => {
+  it("uses the project's own rules and keeps them through saving", () => {
+    const own = rulesDoc(layoutRules);
+    own.rooms.mainBedroom = { minArea: 14, minWidth: 3.2 };
+    const resolved = resolveLayoutRules(layoutRules, own);
+    expect(resolved.error).toBeUndefined();
+    expect(resolved.rules.roomSizes?.mainBedroom).toEqual({ minArea: 14, minWidth: 3.2 });
+
+    const project = { ...createProject(), layoutRules: own };
+    expect(parseProject(serializeProject(project)).layoutRules).toEqual(own);
+  });
+
+  it("falls back to the config when the project's rules do not pass, and says why", () => {
+    const own = rulesDoc(layoutRules);
+    own.adjacency.push({ a: "garage", b: "living", rule: "near", weight: 1, text: "x" });
+    const resolved = resolveLayoutRules(layoutRules, own);
+    expect(resolved.error).toMatch(/unknown room/);
+    expect(resolved.rules).toEqual(rules);
+    expect(resolveLayoutRules(layoutRules).rules).toEqual(rules);
+  });
+
+  it("drops own rules of the wrong shape when a file is opened", () => {
+    const broken = JSON.parse(serializeProject(createProject()));
+    broken.layoutRules = { rooms: 3 };
+    expect(parseProject(JSON.stringify(broken)).layoutRules).toBeUndefined();
+  });
+
+  it("lays out to the edited sizes", { timeout: 30000 }, () => {
+    const own = rulesDoc(layoutRules);
+    own.rooms.bedroom = { minArea: 11, minWidth: 3.0 };
+    const [layout] = run(resolveLayoutRules(layoutRules, own).rules, 1);
+    expect(layout.relaxation).toBe(1);
+    const bedrooms = layout.rooms.filter((r) => r.type === "bedroom");
+    for (const r of bedrooms) expect(r.area).toBeGreaterThan(11 - 0.5);
+    expect(layout.checks.some((c) => c.text.includes("at least 11.0 m², 3.0 m wide"))).toBe(true);
   });
 });

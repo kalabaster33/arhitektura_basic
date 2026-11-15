@@ -298,5 +298,11 @@ export function parseProject(json: string): Project {
       ? { lat, lon }
       : null;
   if (!STAGES.includes(data.stage)) data.stage = "lot";
+  // Own layout rules that are not even the right shape are dropped; the rest is checked when used.
+  const lr = data.layoutRules;
+  const shaped =
+    lr && typeof lr === "object" && lr.rooms && typeof lr.rooms === "object" && Array.isArray(lr.adjacency) &&
+    lr.circulation && typeof lr.circulation === "object";
+  if (!shaped) delete data.layoutRules;
   return data as Project;
 }

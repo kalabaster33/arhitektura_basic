@@ -222,6 +222,17 @@ export interface Annotations {
 export const STAGES = ["lot", "outline", "erker", "core", "apartments"] as const;
 export type Stage = (typeof STAGES)[number];
 
+/**
+ * A project's own layout rules, in the shape of src/config/layoutRules.json:
+ * room sizes, adjacency rules and walking rules. Checked when used; rules that
+ * do not pass fall back to the config.
+ */
+export interface LayoutRulesDoc {
+  rooms: Record<string, { minArea: number; minWidth: number }>;
+  adjacency: { a: string; b: string; rule: string; weight: number; hard?: boolean; text: string }[];
+  circulation: Record<string, number>;
+}
+
 export interface Project {
   schemaVersion: number;
   id: string;
@@ -235,4 +246,6 @@ export interface Project {
   /** The step of the workflow the project is in. */
   stage: Stage;
   site: Site;
+  /** Layout rules edited for this project; absent when the config's rules apply. */
+  layoutRules?: LayoutRulesDoc;
 }

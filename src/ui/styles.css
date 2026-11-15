@@ -1556,3 +1556,90 @@ input.is-invalid {
 .apartments__program {
   grid-column: 2 / -1;
 }
+
+/* ------------------------------------------------------------ layout rules */
+
+.rules__group {
+  margin: 6px 0;
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+}
+
+.rules__group > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 2px 0;
+}
+
+.rules__sizes {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin: 4px 0;
+}
+
+.rules__sizes th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--muted);
+  padding: 2px 4px 2px 0;
+}
+
+.rules__sizes td {
+  padding: 2px 4px 2px 0;
+}
+
+.rules__sizes input {
+  width: 58px;
+}
+
+.rules__list {
+  list-style: none;
+  margin: 4px 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rules__list > li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.rules__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.rules__line select {
+  flex: 1 1 40%;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.rules__line input[type="number"] {
+  width: 52px;
+}
+
+.rules__line .spacer {
+  flex: 1;
+}
+
+.rules__text {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 12px;
+}
+
+.rules__walk input {
+  width: 64px;
+}

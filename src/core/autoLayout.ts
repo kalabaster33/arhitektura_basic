@@ -39,7 +39,7 @@ import {
   pointInPolygon,
   roundTo,
 } from "./geometry.ts";
-import type { SpaceType, Storey, Wall } from "./model.ts";
+import type { LayoutRulesDoc, SpaceType, Storey, Wall } from "./model.ts";
 import { type OpeningSize, addOpening, locateOnWall, openingSides } from "./openings.ts";
 import { type WindowRules, placeWindows, removeRoomWindows } from "./windows.ts";
 import { type LinkedSpaces, linkSpaces } from "./spaces.ts";
@@ -132,6 +132,27 @@ export function parseLayoutRules(raw: unknown): LayoutRules {
     nearDistance: cnum("nearDistance", true),
   };
   return rules;
+}
+
+/** The editable part of a rules file: room sizes, adjacency and walking. */
+export function rulesDoc(raw: unknown): LayoutRulesDoc {
+  const c = raw as LayoutRulesDoc;
+  return structuredClone({ rooms: c.rooms, adjacency: c.adjacency, circulation: c.circulation });
+}
+
+/**
+ * The rules a project works to: the config, with the project's own room
+ * sizes, adjacency and walking rules in place of the config's when they pass
+ * the checks. `error` says why they did not.
+ */
+export function resolveLayoutRules(config: unknown, own?: LayoutRulesDoc): { rules: LayoutRules; error?: string } {
+  const base = parseLayoutRules(config);
+  if (!own) return { rules: base };
+  try {
+    return { rules: parseLayoutRules({ ...(config as object), ...own }) };
+  } catch (e) {
+    return { rules: base, error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 const PROBE = 0.01;

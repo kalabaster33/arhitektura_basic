@@ -17,9 +17,11 @@ import { describeApartments } from "../core/apartments.ts";
 import {
   apartmentInteriorWalls,
   buildLayoutInput,
-  parseLayoutRules,
   proposeLayouts,
+  resolveLayoutRules,
+  rulesDoc,
 } from "../core/autoLayout.ts";
+import { LayoutRulesPanel } from "./LayoutRulesPanel.tsx";
 import {
   computeApartmentAreas,
   computeBuildingAreas,
@@ -103,7 +105,7 @@ import { CorePanel, ErkerPanel, LocationPanel, OutlinePanel, Stepper } from "./W
 const areaConfig = parseAreaConfig(areaDefinitions);
 const coreConfig = parseCoreConfig(coreAlignment);
 const roomCheckConfig = parseRoomCheckConfig(roomChecks);
-const layoutRuleSet = parseLayoutRules(layoutRules);
+const defaultRulesDoc = rulesDoc(layoutRules);
 const siteRules = parseSiteRules(siteRulesJson);
 const exportConfig = parseExportConfig(exportDefaults);
 const dimensionStyle = parseDimensionStyle(dimensionStyleJson);
@@ -333,6 +335,9 @@ export function App() {
   const coreIssues = useMemo(() => checkCoreAlignment(building, coreConfig), [building]);
   const elevationIssues = useMemo(() => checkElevations(building), [building]);
   const planIssues = useMemo(() => checkBuildingPlan(building, roomCheckConfig), [building]);
+  // The project's own layout rules, else the config's.
+  const ruleSetup = useMemo(() => resolveLayoutRules(layoutRules, project.layoutRules), [project.layoutRules]);
+  const layoutRuleSet = ruleSetup.rules;
   const storeyPlanIssues = useMemo(
     () => planIssues.filter((i) => i.storeyId === storey.id),
     [planIssues, storey.id],
@@ -1078,6 +1083,16 @@ export function App() {
                 selection={selection}
                 onChange={(s, record) => setStorey(s, record)}
                 onSelect={setSelection}
+              />
+              <LayoutRulesPanel
+                doc={project.layoutRules && !ruleSetup.error ? project.layoutRules : defaultRulesDoc}
+                own={project.layoutRules !== undefined}
+                error={ruleSetup.error}
+                config={layoutRules}
+                onChange={(doc) => {
+                  const { layoutRules: _old, ...rest } = project;
+                  setProject(doc ? { ...rest, layoutRules: doc } : rest);
+                }}
               />
               <AreaTable
                 storey={storey}
