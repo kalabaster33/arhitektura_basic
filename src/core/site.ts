@@ -172,6 +172,14 @@ export function setSetback(project: Project, edgeIndex: number, setback: number)
 }
 
 /** Sets or clears (null) the planning limits of the plot. */
+/** Sets where north is on the plan, in degrees clockwise from the top. */
+export function setNorth(project: Project, degrees: number): Project {
+  if (!Number.isFinite(degrees)) return project;
+  const d = degrees % 360;
+  const north = Math.round((d < 0 ? d + 360 : d) * 1e6) / 1e6;
+  return north === project.site.north ? project : { ...project, site: { ...project.site, north } };
+}
+
 export function setSiteLimits(project: Project, patch: Partial<SiteLimits>): Project {
   const clean = (v: number | null | undefined, old: number | null) =>
     v === undefined ? old : v !== null && v > 0 ? v : null;

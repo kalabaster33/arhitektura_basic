@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import annotationStyleJson from "../config/annotationStyle.json";
 import areaDefinitions from "../config/areaDefinitions.json";
 import dimensionStyleJson from "../config/dimensionStyle.json";
 import coreAlignment from "../config/coreAlignment.json";
@@ -7,6 +8,7 @@ import exportDefaults from "../config/exportDefaults.json";
 import layoutRules from "../config/layoutRules.json";
 import roomChecks from "../config/roomChecks.json";
 import siteRulesJson from "../config/siteRules.json";
+import { parseAnnotationStyle, storeyAnnotations } from "../core/annotations.ts";
 import { describeApartments } from "../core/apartments.ts";
 import {
   type LayoutProposal,
@@ -77,6 +79,7 @@ const layoutRuleSet = parseLayoutRules(layoutRules);
 const siteRules = parseSiteRules(siteRulesJson);
 const exportConfig = parseExportConfig(exportDefaults);
 const dimensionStyle = parseDimensionStyle(dimensionStyleJson);
+const annotationStyle = parseAnnotationStyle(annotationStyleJson);
 /** Printed on the Notes sheet of an exported schedule. */
 const exportNotes = [areaDefinitions._status, siteRulesJson._status];
 
@@ -143,6 +146,10 @@ export function App() {
   const linked = useMemo(() => linkSpaces(storey), [storey]);
   const dimensionChains = useMemo(
     () => storeyChains(storey, project.annotations, dimensionStyle, dimensionStyle.screenScale, linked),
+    [storey, project.annotations, linked],
+  );
+  const annotationEntities = useMemo(
+    () => storeyAnnotations(storey, project.annotations, annotationStyle, dimensionStyle.screenScale, linked),
     [storey, project.annotations, linked],
   );
   const areas = useMemo(() => computeStoreyAreas(storey, areaConfig), [storey]);
@@ -455,6 +462,7 @@ export function App() {
           analysis={siteAnalysis}
           config={exportConfig}
           dimensionStyle={dimensionStyle}
+          annotationStyle={annotationStyle}
           footprintRule={siteRules.footprint === "allStoreys" ? "all storeys seen from above" : "lowest storey only"}
           notes={exportNotes}
           onClose={() => setExporting(false)}
@@ -513,6 +521,8 @@ export function App() {
             site={siteAnalysis}
             dimensionChains={dimensionChains}
             dimensionStyle={dimensionStyle}
+            annotationEntities={annotationEntities}
+            north={project.site.north}
             onPlotDrawn={(corners) => {
               setProject(
                 setBoundary(project, corners, siteRules.defaultSetback, {

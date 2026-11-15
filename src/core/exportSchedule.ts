@@ -49,7 +49,14 @@ export interface ScheduleInfo {
   footprintRule: string;
 }
 
-const COLUMN_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+/** Spreadsheet column name of a column index: 0 -> A, 25 -> Z, 26 -> AA. */
+function columnLetter(index: number): string {
+  let name = "";
+  for (let n = index + 1; n > 0; n = Math.floor((n - 1) / 26)) {
+    name = String.fromCharCode(65 + ((n - 1) % 26)) + name;
+  }
+  return name;
+}
 
 /** The value a cell shows, whatever kind of cell it is. */
 export const cellValue = (cell: Cell): string | number | null =>
@@ -69,7 +76,7 @@ function totalRow(label: string, width: number, sumColumns: number[], rows: Sche
       const v = cellValue(r.cells[c]);
       if (typeof v === "number") value += v;
     }
-    const letter = COLUMN_LETTERS[c];
+    const letter = columnLetter(c);
     cells[c] = rows.length ? { value, formula: `SUM(${letter}2:${letter}${rows.length + 1})` } : value;
   }
   return { cells, style: "total" };
@@ -156,6 +163,62 @@ export function buildSchedule(
       { header: "Gross area (m²)", kind: "area", width: 15 },
     ],
     rows: [...storeys, totalRow("Building", 6, [3, 4, 5], storeys)],
+  };
+
+  // Doors and windows: one row per size, one column per storey with how many it has.
+  const allStoreys = buildings.flatMap((b) =>
+    sortedStoreys(b).map((s) => ({ label: storeyLabel(b.name, s.name), storey: s })),
+  );
+  const sizes = new Map<string, { kind: string; width: number; height: number; sill: number; counts: number[] }>();
+  allStoreys.forEach(({ storey }, column) => {
+    for (const o of storey.openings) {
+      const key = [o.kind, o.width, o.height, o.sill].join("|");
+      let row = sizes.get(key);
+      if (!row) {
+        row = { kind: o.kind, width: o.width, height: o.height, sill: o.sill, counts: allStoreys.map(() => 0) };
+        sizes.set(key, row);
+      }
+      row.counts[column]++;
+    }
+  });
+  const firstCount = 4;
+  const totalColumn = firstCount + allStoreys.length;
+  const openings: ScheduleRow[] = [...sizes.values()]
+    .sort(
+      (a, b) => a.kind.localeCompare(b.kind) || a.width - b.width || a.height - b.height || a.sill - b.sill,
+    )
+    .map((r, i) => ({
+      cells: [
+        r.kind === "door" ? "Door" : "Window",
+        r.width,
+        r.height,
+        r.sill,
+        ...r.counts,
+        {
+          value: r.counts.reduce((a, b) => a + b, 0),
+          formula: `SUM(${columnLetter(firstCount)}${i + 2}:${columnLetter(totalColumn - 1)}${i + 2})`,
+        },
+      ],
+    }));
+  const openingsSheet: ScheduleSheet = {
+    name: "Doors and windows",
+    columns: [
+      { header: "Type", kind: "text", width: 12 },
+      { header: "Width (m)", kind: "length", width: 11 },
+      { header: "Height (m)", kind: "length", width: 11 },
+      { header: "Sill (m)", kind: "length", width: 10 },
+      ...allStoreys.map(({ label }) => ({ header: label, kind: "count" as const, width: 14 })),
+      { header: "Total", kind: "count", width: 9 },
+    ],
+    rows: [
+      ...openings,
+      totalRow(
+        "Total",
+        totalColumn + 1,
+        Array.from({ length: allStoreys.length + 1 }, (_, i) => firstCount + i),
+        openings,
+      ),
+    ],
   };
 
   // Site: one figure per row. The two ratios are formulas on the rows above.
@@ -248,6 +311,6 @@ export function buildSchedule(
 
   return {
     decimals: areaConfig.decimals,
-    sheets: [roomsSheet, apartmentsSheet, storeysSheet, siteSheet, notesSheet],
+    sheets: [roomsSheet, apartmentsSheet, storeysSheet, openingsSheet, siteSheet, notesSheet],
   };
 }

@@ -297,10 +297,10 @@ describe("dimensions in files", () => {
   it("are saved and loaded with the project", () => {
     let project = createSampleProject();
     project = replaceStorey(project, addDimension(getActiveStorey(project), { x: 0, y: 0 }, { x: 8, y: 0 }, -1));
-    project = { ...project, annotations: { outsideDimensions: false, roomDimensions: true } };
+    project = { ...project, annotations: { ...project.annotations, outsideDimensions: false } };
     const loaded = parseProject(serializeProject(project));
     expect(loaded.schemaVersion).toBe(SCHEMA_VERSION);
-    expect(loaded.annotations).toEqual({ outsideDimensions: false, roomDimensions: true });
+    expect(loaded.annotations).toMatchObject({ outsideDimensions: false, roomDimensions: true });
     expect(getActiveStorey(loaded).dimensions).toEqual(getActiveStorey(project).dimensions);
   });
 
@@ -311,8 +311,8 @@ describe("dimensions in files", () => {
     delete old.annotations;
     for (const s of old.site.buildings[0].storeys) delete s.dimensions;
     const loaded = parseProject(JSON.stringify(old));
-    expect(loaded.schemaVersion).toBe(3);
-    expect(loaded.annotations).toEqual({ outsideDimensions: true, roomDimensions: true });
+    expect(loaded.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(loaded.annotations).toMatchObject({ outsideDimensions: true, roomDimensions: true });
     expect(getActiveStorey(loaded).dimensions).toEqual([]);
     expect(getActiveStorey(loaded).walls).toHaveLength(6);
   });

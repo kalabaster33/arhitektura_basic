@@ -19,6 +19,7 @@ export const LAYER_KEYS = [
   "windows",
   "rooms",
   "dimensions",
+  "tags",
   "plot",
   "buildable",
   "footprint",

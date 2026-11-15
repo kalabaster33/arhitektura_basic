@@ -3,6 +3,7 @@
  * Pure functions, no UI imports. Sizes and layer names come from a config
  * (src/config/exportDefaults.json).
  */
+import { type AnnotationStyle, storeyAnnotations } from "./annotations.ts";
 import { type AreaConfig, formatArea } from "./areas.ts";
 import { sortedStoreys } from "./building.ts";
 import { type DimensionStyle, storeyDimensions } from "./dimensions.ts";
@@ -104,6 +105,8 @@ export interface Sheet {
   drawing: Drawing;
   /** Short lines printed in the title block. */
   notes: string[];
+  /** The north arrow to draw: its direction in degrees clockwise from the top, and its length on paper. */
+  north?: { degrees: number; sizeMm: number };
 }
 
 /**
@@ -120,8 +123,12 @@ export function buildSheets(
   analysis: SiteAnalysis,
   config: ExportConfig,
   dimensionStyle?: DimensionStyle,
+  annotationStyle?: AnnotationStyle,
 ): Sheet[] {
   const sheets: Sheet[] = [];
+  const north = annotationStyle
+    ? { degrees: project.site.north, sizeMm: annotationStyle.northArrowMm }
+    : undefined;
   const textHeight = (scale: number) => (config.textHeightMm * scale) / 1000;
   const site = project.site;
   if (selection.includeSite && analysis.hasPlot) {
@@ -135,6 +142,7 @@ export function buildSheets(
       scale: selection.siteScale,
       drawing: siteDrawing(site, analysis, textHeight(selection.siteScale)),
       notes,
+      north,
     });
   }
   const many = site.buildings.length > 1;
@@ -147,9 +155,17 @@ export function buildSheets(
         scale: selection.scale,
         drawing: addEntities(
           storeyDrawing(storey, areaConfig, textHeight(selection.scale)),
-          dimensionStyle ? storeyDimensions(storey, project.annotations, dimensionStyle, selection.scale) : [],
+          [
+            ...(dimensionStyle
+              ? storeyDimensions(storey, project.annotations, dimensionStyle, selection.scale)
+              : []),
+            ...(annotationStyle
+              ? storeyAnnotations(storey, project.annotations, annotationStyle, selection.scale)
+              : []),
+          ],
         ),
         notes: [`Floor level ${storey.elevation >= 0 ? "+" : ""}${storey.elevation.toFixed(2)} m`],
+        north,
       });
     }
   }

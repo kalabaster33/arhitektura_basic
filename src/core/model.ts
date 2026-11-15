@@ -8,7 +8,7 @@
  */
 import type { Pt } from "./geometry.ts";
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export type WallKind = "exterior" | "interior";
 
@@ -131,6 +131,8 @@ export interface Site {
   setbacks: number[];
   /** Planning limits for this plot; null means no limit is checked. */
   limits: SiteLimits;
+  /** Where north is on the plan, in degrees clockwise from the top (0 = up). */
+  north: number;
   buildings: Building[];
 }
 
@@ -140,6 +142,10 @@ export interface Annotations {
   outsideDimensions: boolean;
   /** Clear width and length of every room. */
   roomDimensions: boolean;
+  /** Size tag at every door and window. */
+  openingTags: boolean;
+  /** Floor level mark on every storey. */
+  levelMarks: boolean;
 }
 
 export interface Project {

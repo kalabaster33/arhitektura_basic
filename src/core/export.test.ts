@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import ExcelJS from "exceljs";
 import { describe, expect, it } from "vitest";
+import annotationStyleJson from "../config/annotationStyle.json";
 import areaDefinitions from "../config/areaDefinitions.json";
 import dimensionStyleJson from "../config/dimensionStyle.json";
 import exportDefaults from "../config/exportDefaults.json";
@@ -9,6 +10,7 @@ import siteRulesJson from "../config/siteRules.json";
 import { fileBase } from "../export/download.ts";
 import { scaleBarLength, writePdf } from "../export/pdf.ts";
 import { writeXlsx } from "../export/xlsx.ts";
+import { parseAnnotationStyle } from "./annotations.ts";
 import { createApartment } from "./apartments.ts";
 import { computeBuildingAreas, computeStoreyAreas, parseAreaConfig } from "./areas.ts";
 import { copyStorey, sortedStoreys } from "./building.ts";
@@ -238,6 +240,7 @@ describe("DXF", () => {
         analyse(project),
         config,
         parseDimensionStyle(dimensionStyleJson),
+        parseAnnotationStyle(annotationStyleJson),
       ),
       config,
     );
@@ -362,7 +365,7 @@ describe("files", () => {
     const bytes = await writeXlsx(schedule);
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(bytes.buffer as ArrayBuffer);
-    expect(workbook.worksheets.map((w) => w.name)).toEqual(["Rooms", "Apartments", "Storeys", "Site", "Notes"]);
+    expect(workbook.worksheets.map((w) => w.name)).toEqual(["Rooms", "Apartments", "Storeys", "Doors and windows", "Site", "Notes"]);
     const rooms = workbook.getWorksheet("Rooms")!;
     expect(rooms.getColumn(3).values).toContain("Дневна соба");
     const total = rooms.getRow(rooms.rowCount).getCell(5);

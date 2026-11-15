@@ -6,6 +6,7 @@
  * so the program that opens it has to be told "metres". The y axis is flipped,
  * because y points down in the model and up in a DXF.
  */
+import { northArrow } from "./annotations.ts";
 import { type Drawing, type Entity, type LayerKey, LAYER_KEYS, translateDrawing } from "./drawing.ts";
 import type { ExportConfig, Sheet } from "./sheets.ts";
 
@@ -60,7 +61,13 @@ export function arrangeForDxf(sheets: Sheet[], config: Pick<ExportConfig, "dxfGa
       height,
       bold: true,
     };
-    out.push({ entities: [...drawing.entities, title], bounds: placed });
+    // The north arrow stands beside the top right corner of the drawing.
+    const size = sheet.north ? (sheet.north.sizeMm * sheet.scale) / 1000 : 0;
+    const arrow =
+      sheet.north && placed
+        ? northArrow({ x: placed.maxX + size, y: placed.minY + size / 2 }, size, sheet.north.degrees)
+        : [];
+    out.push({ entities: [...drawing.entities, title, ...arrow], bounds: placed });
   }
   return out;
 }

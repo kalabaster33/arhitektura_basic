@@ -1034,3 +1034,33 @@ input.is-invalid {
 .dimensions__own {
   margin: 10px 0 0;
 }
+
+/* ------------------------------------------------------- tags and north */
+
+.dim--tags .dim__line {
+  stroke: #8a5a00;
+}
+
+.dim--tags .dim__text {
+  fill: #8a5a00;
+}
+
+.north {
+  pointer-events: none;
+}
+
+.north__shaft {
+  fill: none;
+  stroke: #3b3f47;
+  stroke-width: 1.5;
+}
+
+.north__head {
+  fill: #3b3f47;
+}
+
+.north text {
+  fill: #3b3f47;
+  font-weight: 700;
+  font-size: 11px;
+}

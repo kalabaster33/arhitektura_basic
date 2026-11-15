@@ -33,13 +33,14 @@ export function createProject(name = "Untitled project", snap = 0.05): Project {
     name,
     units: "m",
     grid: { snap },
-    annotations: { outsideDimensions: true, roomDimensions: true },
+    annotations: { outsideDimensions: true, roomDimensions: true, openingTags: true, levelMarks: true },
     site: {
       id: newId("site"),
       name: "Site",
       boundary: [],
       setbacks: [],
       limits: { maxCoverage: null, maxFloorAreaRatio: null },
+      north: 0,
       buildings: [building],
     },
   };
@@ -128,6 +129,13 @@ const MIGRATIONS: Record<number, (data: any) => any> = {
       })),
     },
   }),
+  // Version 4 stores where north is, and whether opening tags and level marks are shown.
+  3: (data) => ({
+    ...data,
+    schemaVersion: 4,
+    annotations: { ...data.annotations, openingTags: true, levelMarks: true },
+    site: { ...data.site, north: 0 },
+  }),
 };
 
 /** Parses a saved project; throws a readable error when the file cannot be used. */
@@ -203,6 +211,10 @@ export function parseProject(json: string): Project {
   data.annotations = {
     outsideDimensions: data.annotations?.outsideDimensions !== false,
     roomDimensions: data.annotations?.roomDimensions !== false,
+    openingTags: data.annotations?.openingTags !== false,
+    levelMarks: data.annotations?.levelMarks !== false,
   };
+  const north = Number.isFinite(site.north) ? site.north % 360 : 0;
+  site.north = north < 0 ? north + 360 : north;
   return data as Project;
 }

@@ -418,7 +418,7 @@ export function ownChain(d: Dimension): DimChain | null {
  * right, and bottom to top on a vertical line. `up` points from the line to
  * the side the figures stand on.
  */
-function textFrame(from: Pt, to: Pt): { angle: number; dir: Pt; up: Pt } {
+export function textFrame(from: Pt, to: Pt): { angle: number; dir: Pt; up: Pt } {
   let angle = Math.atan2(to.y - from.y, to.x - from.x);
   const eps = 1e-9;
   if (angle >= Math.PI / 2 - eps) angle -= Math.PI;
@@ -493,7 +493,7 @@ export function chainEntities(chains: DimChain[], style: DimensionStyle, scale: 
 /** Every chain of a storey that is switched on, hand-placed ones included. */
 export function storeyChains(
   storey: Storey,
-  annotations: Annotations,
+  annotations: Pick<Annotations, "outsideDimensions" | "roomDimensions">,
   style: DimensionStyle,
   scale: number,
   linked: LinkedSpaces = linkSpaces(storey),
@@ -511,7 +511,7 @@ export function storeyChains(
 /** All dimensions of a storey as shapes, ready for the screen, a PDF or a DXF. */
 export function storeyDimensions(
   storey: Storey,
-  annotations: Annotations,
+  annotations: Pick<Annotations, "outsideDimensions" | "roomDimensions">,
   style: DimensionStyle,
   scale: number,
 ): Entity[] {

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { AnnotationStyle } from "../core/annotations.ts";
 import type { AreaConfig } from "../core/areas.ts";
 import { sortedStoreys } from "../core/building.ts";
 import { writeDxf } from "../core/exportDxf.ts";
@@ -14,7 +15,11 @@ type Format = "pdf" | "dxf" | "xlsx";
 const FORMATS: { format: Format; label: string; what: string }[] = [
   { format: "pdf", label: "PDF", what: "Plan sheets to print, drawn to scale with a title block." },
   { format: "dxf", label: "DXF", what: "The same drawings for AutoCAD or Revit, at 1:1 in metres on named layers." },
-  { format: "xlsx", label: "XLSX", what: "The area schedule as a spreadsheet: rooms, apartments, storeys and site." },
+  {
+    format: "xlsx",
+    label: "XLSX",
+    what: "The schedules as a spreadsheet: rooms, apartments, storeys, doors and windows, and site.",
+  },
 ];
 
 const today = () => {
@@ -29,6 +34,7 @@ export function ExportDialog(props: {
   analysis: SiteAnalysis;
   config: ExportConfig;
   dimensionStyle: DimensionStyle;
+  annotationStyle: AnnotationStyle;
   /** Which storeys make up the footprint, in words. */
   footprintRule: string;
   /** The "to be verified" notes of the configs the figures depend on. */
@@ -73,8 +79,20 @@ export function ExportDialog(props: {
         analysis,
         config,
         props.dimensionStyle,
+        props.annotationStyle,
       ),
-    [project, storeyIds, includeSite, scale, siteScale, areaConfig, analysis, config, props.dimensionStyle],
+    [
+      project,
+      storeyIds,
+      includeSite,
+      scale,
+      siteScale,
+      areaConfig,
+      analysis,
+      config,
+      props.dimensionStyle,
+      props.annotationStyle,
+    ],
   );
   const tooLarge = format === "pdf" ? sheetsThatDoNotFit(sheets, config.paper[paper], config) : [];
   const ready = !busy && (!drawing || (sheets.length > 0 && tooLarge.length === 0));

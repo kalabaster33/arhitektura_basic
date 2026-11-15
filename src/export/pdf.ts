@@ -6,6 +6,7 @@
  * The built-in PDF fonts have no Cyrillic, so a font with it is embedded; the
  * caller passes the font files in (see fonts.ts).
  */
+import { northArrow } from "../core/annotations.ts";
 import { type Entity, arcPoints } from "../core/drawing.ts";
 import type { Pt } from "../core/geometry.ts";
 import { type ExportConfig, type Sheet, layoutSheet } from "../core/sheets.ts";
@@ -152,6 +153,16 @@ export async function writePdf(
     // Shapes first, lettering on top.
     for (const e of sheet.drawing.entities) if (e.kind !== "text") draw(e);
     for (const e of sheet.drawing.entities) if (e.kind === "text") draw(e);
+
+    // North arrow in the top right corner of the sheet, a fixed size on paper.
+    if (sheet.north) {
+      const s = sheet.north.sizeMm;
+      const corner = {
+        x: (layout.frame.x + layout.frame.w - s - layout.offset.x) / k,
+        y: (layout.frame.y + s - layout.offset.y) / k,
+      };
+      for (const e of northArrow(corner, s / k, sheet.north.degrees)) draw(e);
+    }
 
     // Border and title block.
     const { frame, titleBlock: t } = layout;

@@ -1,0 +1,12 @@
+{
+  "_doc": "How door and window tags, floor level marks and the north arrow are drawn. Drawing conventions only, not design rules. tagUnit / tagDecimals: unit and decimals of the sizes in a tag ('cm', 'm' or 'mm'). A door tag reads width/height (90/210); a window tag adds its sill height after sillPrefix (120/140 p=90). The sizes below are millimetres on paper; on screen the plan is treated as if drawn at the screenScale of dimensionStyle.json. tagTextHeightMm: height of tag lettering. tagGapMm: gap between a tag and the wall face. levelTextHeightMm: height of the floor level figure. levelSymbolMm: width of the triangle beside it. levelOffsetMm: how far above the room label the level mark sits. northArrowMm: length of the north arrow.",
+  "tagUnit": "cm",
+  "tagDecimals": 0,
+  "sillPrefix": "p=",
+  "tagTextHeightMm": 1.8,
+  "tagGapMm": 0.8,
+  "levelTextHeightMm": 2.2,
+  "levelSymbolMm": 3,
+  "levelOffsetMm": 10,
+  "northArrowMm": 14
+}

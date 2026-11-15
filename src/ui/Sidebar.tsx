@@ -40,6 +40,7 @@ import {
   deleteBoundaryCorner,
   insertBoundaryCorner,
   moveBoundaryCorner,
+  setNorth,
   setSetback,
   setSiteLimits,
 } from "../core/site.ts";
@@ -832,6 +833,47 @@ function MoveBuildingForm(props: { onMove: (delta: Pt) => void }) {
   );
 }
 
+/** Where north is on the plan. Commits on Enter or when focus leaves. */
+function NorthField(props: { value: number; onCommit: (degrees: number) => void }) {
+  const shown = String(Math.round(props.value * 10) / 10);
+  const [text, setText] = useState(shown);
+  const [invalid, setInvalid] = useState(false);
+  useEffect(() => {
+    setText(shown);
+    setInvalid(false);
+  }, [shown]);
+  const commit = () => {
+    const value = Number(text.trim().replace(",", "."));
+    if (text.trim() === "" || !Number.isFinite(value)) {
+      setInvalid(true);
+      return;
+    }
+    setInvalid(false);
+    if (text.trim() !== shown) props.onCommit(value);
+  };
+  return (
+    <label className="field">
+      <span>North, clockwise from the top of the plan</span>
+      <span className="field__input">
+        <input
+          value={text}
+          className={invalid ? "is-invalid" : ""}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            if (e.key === "Escape") {
+              setText(shown);
+              setInvalid(false);
+            }
+          }}
+        />
+        <em>°</em>
+      </span>
+    </label>
+  );
+}
+
 export function SitePanel(props: {
   project: Project;
   buildingId: string;
@@ -1029,6 +1071,8 @@ export function SitePanel(props: {
         </>
       )}
 
+      <NorthField value={project.site.north} onCommit={(v) => onChange(setNorth(project, v))} />
+
       <p className="hint">
         Dashed green line: the buildable area, the plot less the setback of each edge. Dotted
         outline: the building footprint to the outside wall faces,{" "}
@@ -1057,7 +1101,7 @@ export function DimensionsPanel(props: {
   return (
     <section className="panel">
       <h2>
-        Dimensions <small>in {style.unit}</small>
+        Dimensions and tags <small>in {style.unit}</small>
       </h2>
       <label className="check">
         <input
@@ -1075,6 +1119,22 @@ export function DimensionsPanel(props: {
         />
         Width and length of rooms
       </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={annotations.openingTags}
+          onChange={(e) => props.onChange({ ...annotations, openingTags: e.target.checked })}
+        />
+        Door and window tags
+      </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={annotations.levelMarks}
+          onChange={(e) => props.onChange({ ...annotations, levelMarks: e.target.checked })}
+        />
+        Floor level mark
+      </label>
       <div className="button-row dimensions__own">
         <button onClick={props.onUseTool} title="Dimension tool (M)">
           Place a dimension
@@ -1087,7 +1147,8 @@ export function DimensionsPanel(props: {
         Around the building, from the wall outward: openings, then rooms and wall thicknesses (
         {style.measureTo === "faces" ? "to the wall faces" : "to the wall centrelines"}), then the
         overall length. A slanted wall is measured as seen from that side; place your own dimension
-        for its true length. Dimensions are sized for 1:{style.screenScale} on screen and for the
+        for its true length. A door tag reads width/height, a window tag adds its sill height.
+        Dimensions and tags are sized for 1:{style.screenScale} on screen and for the
         chosen scale when exported.
       </p>
     </section>

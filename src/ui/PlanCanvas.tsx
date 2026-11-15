@@ -82,6 +82,10 @@ interface Props {
   /** Every dimension of the storey that is to be shown, hand-placed ones included. */
   dimensionChains: DimChain[];
   dimensionStyle: DimensionStyle;
+  /** Door and window tags and the floor level mark, where they are switched on. */
+  annotationEntities: Entity[];
+  /** Where north is, in degrees clockwise from the top of the plan. */
+  north: number;
   /** A plot outline drawn with the site tool, already checked. */
   onPlotDrawn: (corners: Pt[]) => void;
   onProjectChange: (project: Project, record: boolean) => void;
@@ -123,7 +127,7 @@ function DimensionShapes(props: { entities: Entity[]; px: number; className?: st
           return (
             <path
               key={i}
-              d={`M${e.points.map((p) => `${p.x},${p.y}`).join("L")}`}
+              d={`M${e.points.map((p) => `${p.x},${p.y}`).join("L")}${e.closed ? "Z" : ""}`}
               className="dim__line"
               strokeWidth={props.px}
             />
@@ -916,6 +920,7 @@ export function PlanCanvas(props: Props) {
             />
           ))}
 
+        <DimensionShapes entities={props.annotationEntities} px={px} className="dim--tags" />
         <DimensionShapes entities={autoDims} px={px} />
         {ownDims.map(({ chain, entities }) => {
           const selected = selection?.kind === "dimension" && selection.id === chain.id;
@@ -1000,6 +1005,14 @@ export function PlanCanvas(props: Props) {
       </g>
 
       <g className="plan-overlay">
+        <g transform={`translate(${size.w - 38} 84) rotate(${props.north})`} className="north">
+          <title>North</title>
+          <path d="M0 16V-8" className="north__shaft" />
+          <path d="M0 -18L-5 -6H5Z" className="north__head" />
+          <text x={0} y={-22} textAnchor="middle">
+            N
+          </text>
+        </g>
         <text x={12} y={size.h - 12}>
           {cursor ? `x ${cursor.x.toFixed(2)}   y ${cursor.y.toFixed(2)} m` : ""}
         </text>
