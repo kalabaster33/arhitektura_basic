@@ -1,8 +1,12 @@
 {
   "_status": "TO BE VERIFIED BY A LICENSED ENGINEER. Starting values, not taken from any urban plan, standard or building code. How far a balcony may reach into a setback comes from the planning conditions of the plot.",
-  "_doc": "width / depth / railing: starting size (metres) of a new balcony or loggia and the thickness of its railing. maxIntoSetback: how far (metres) a balcony may reach past the setback line towards the plot edge; 0 means it must stay behind the setback line like the building itself. Loggias lie inside the building outline and are checked with the building.",
+  "_doc": "width / depth / railing: starting size (metres) of a new balcony or loggia and the thickness of its railing. maxIntoSetback: how far (metres) a balcony may reach past the setback line towards the plot edge; 0 means it must stay behind the setback line like the building itself. door: width and height (metres) of the door a new balcony or loggia gets from the room behind it. Loggias lie inside the building outline and are checked with the building.",
   "width": 3,
   "depth": 1.5,
   "railing": 0.1,
-  "maxIntoSetback": 0
+  "maxIntoSetback": 0,
+  "door": {
+    "width": 0.9,
+    "height": 2.2
+  }
 }

@@ -15,6 +15,7 @@ export interface BalconyConfig {
   depth: number;
   railing: number;
   maxIntoSetback: number;
+  door: { width: number; height: number };
 }
 
 export function parseBalconyConfig(raw: unknown): BalconyConfig {
@@ -26,6 +27,9 @@ export function parseBalconyConfig(raw: unknown): BalconyConfig {
     if (!ok) throw new Error(`Balconies: invalid or missing "${key}".`);
     out[key] = v;
   }
+  const door = c?.door;
+  if (!door || !(door.width > 0) || !(door.height > 0)) throw new Error('Balconies: invalid or missing "door".');
+  out.door = { width: door.width, height: door.height };
   return out;
 }
 

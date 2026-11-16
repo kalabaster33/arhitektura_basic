@@ -8,7 +8,7 @@ import { balconySiteIssues, parseBalconyConfig } from "./balconies.ts";
 import { addStorey, sortedStoreys } from "./building.ts";
 import { parseColumnConfig, proposeColumns } from "./columns.ts";
 import type { Balcony, Project, Storey } from "./model.ts";
-import { addOpening } from "./openings.ts";
+import { addOpening, moveOpening, openingSides } from "./openings.ts";
 import { createProject, parseProject, replaceStorey, serializeProject } from "./project.ts";
 import { setBoundary } from "./site.ts";
 import { linkSpaces } from "./spaces.ts";
@@ -69,6 +69,7 @@ describe("balcony config", () => {
     expect(config.depth).toBeGreaterThan(0);
     expect(() => parseBalconyConfig({ ...balconiesJson, railing: 0 })).toThrow(/railing/);
     expect(() => parseBalconyConfig({ ...balconiesJson, maxIntoSetback: -1 })).toThrow(/maxIntoSetback/);
+    expect(() => parseBalconyConfig({ ...balconiesJson, door: { width: 0 } })).toThrow(/door/);
   });
 });
 
@@ -185,6 +186,58 @@ describe("loggias", () => {
     const bid = p.site.buildings[0].id;
     expect(addBalcony(p, bid, spec({ kind: "loggia", offset: 8, width: 4, depth: 4.8 })).problem).toMatch(/hall/);
     expect(addBalcony(p, bid, spec({ kind: "loggia", offset: 1, width: 3, depth: 14 })).problem).toMatch(/other side/);
+  });
+});
+
+describe("balcony doors", () => {
+  const door = { width: 0.9, height: 2.2 };
+  /** The doors that open onto a room. */
+  const doorsInto = (s: Storey, spaceId: string) => {
+    const linked = linkSpaces(s);
+    return s.openings.filter((o) => o.kind === "door" && openingSides(s, o, linked).includes(spaceId));
+  };
+
+  it("give a balcony a door from the room behind, in the middle of the outside wall", () => {
+    const { project } = add(block(), { door });
+    const upper = storeys(project)[1];
+    const balcony = spaceNamed(upper, "Balcony")!;
+    const doors = doorsInto(upper, balcony.id);
+    expect(doors).toHaveLength(1);
+    const wall = upper.walls.find((w) => w.id === doors[0].wallId)!;
+    expect(wall.part).toBe("shell");
+    // Balcony from x 2 to 5 on the side along y = 0: the door is centred at x 3.5.
+    expect(wall.a.x + ((wall.b.x - wall.a.x) / Math.hypot(wall.b.x - wall.a.x, wall.b.y - wall.a.y)) * doors[0].offset).toBeCloseTo(3.5, 6);
+    expect(doors[0].width).toBe(0.9);
+    expect(doors[0].height).toBe(2.2);
+    // No other floor and no other balcony gets a second one on the next rebuild.
+    const again = storeys(rebuildStructure(project, project.site.buildings[0].id))[1];
+    expect(doorsInto(again, balcony.id)).toHaveLength(1);
+    expect(storeys(project)[0].openings).toEqual(storeys(block())[0].openings);
+  });
+
+  it("give a loggia a door in the back of the cut", () => {
+    const { project } = add(block(), { kind: "loggia", offset: 2, width: 4, door });
+    const upper = storeys(project)[1];
+    const loggia = spaceNamed(upper, "Loggia")!;
+    const doors = doorsInto(upper, loggia.id);
+    expect(doors).toHaveLength(1);
+    const wall = upper.walls.find((w) => w.id === doors[0].wallId)!;
+    // The back of the cut lies 1.5 in from the facade, on the wall centreline.
+    expect(wall.a.y).toBeCloseTo(1.5 + project.site.buildings[0].structure.wallThickness / 2, 6);
+  });
+
+  it("leave a door that was moved where it is, and give none without the setting", () => {
+    const { project } = add(block(), { door, width: 4 });
+    const bid = project.site.buildings[0].id;
+    let upper = storeys(project)[1];
+    const placed = upper.openings.at(-1)!;
+    upper = moveOpening(upper, placed.id, placed.offset + 1);
+    const moved = upper.openings.find((o) => o.id === placed.id)!;
+    expect(moved.offset).not.toBe(placed.offset);
+    const after = storeys(rebuildStructure(replaceStorey(project, upper), bid))[1];
+    expect(after.openings.filter((o) => o.kind === "door" && o.wallId === placed.wallId)).toEqual([moved]);
+    const none = storeys(add(block()).project)[1];
+    expect(doorsInto(none, spaceNamed(none, "Balcony")!.id)).toHaveLength(0);
   });
 });
 

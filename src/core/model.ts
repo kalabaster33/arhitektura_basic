@@ -158,6 +158,11 @@ export interface Balcony {
   depth: number;
   /** Thickness of its railing. */
   railing: number;
+  /**
+   * Size of the door it gets from the room behind, when it has no door yet;
+   * absent for none.
+   */
+  door?: { width: number; height: number };
 }
 
 export interface Storey {

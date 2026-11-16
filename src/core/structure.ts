@@ -27,6 +27,7 @@ import {
   type Building,
   type Column,
   type CoreElement,
+  type Opening,
   type CoreKind,
   type Project,
   type SpaceType,
@@ -36,9 +37,9 @@ import {
   type Wall,
   STAGES,
 } from "./model.ts";
-import { type OpeningSize, addOpening, reconcileOpenings } from "./openings.ts";
+import { type OpeningSize, addOpening, locateOnWall, openingSides, reconcileOpenings } from "./openings.ts";
 import { boundaryProblem } from "./site.ts";
-import { linkSpaces, syncCirculation } from "./spaces.ts";
+import { type LinkedSpaces, linkSpaces, syncCirculation } from "./spaces.ts";
 
 const round = (v: number) => Math.round(v * 1e6) / 1e6;
 const roundPt = (p: Pt): Pt => ({ x: round(p.x), y: round(p.y) });
@@ -341,8 +342,8 @@ function railingWalls(structure: Structure, storey: Storey): Wall[] {
 
 /**
  * Gives the rooms the balconies and loggias enclose their type and name where
- * they are still plain rooms, and hands each to the apartment of the room
- * behind it when it belongs to none.
+ * they are still plain rooms, hands each to the apartment of the room behind
+ * it when it belongs to none, and gives it a door when it has none.
  */
 export function nameBalconySpaces(structure: Structure, storey: Storey): Storey {
   const list = placeableBalconies(structure);
@@ -374,15 +375,53 @@ export function nameBalconySpaces(structure: Structure, storey: Storey): Storey 
     const apartment = owner && storey.apartments.find((a) => a.spaceIds.includes(owner.id));
     if (apartment && !storey.apartments.some((a) => a.spaceIds.includes(space.id))) joins.set(space.id, apartment.id);
   }
-  if (patch.size === 0 && joins.size === 0) return storey;
-  return {
-    ...storey,
-    spaces: storey.spaces.map((s) => (patch.has(s.id) ? { ...s, ...patch.get(s.id)! } : s)),
-    apartments: storey.apartments.map((a) => {
-      const extra = [...joins].filter(([, apt]) => apt === a.id).map(([id]) => id);
-      return extra.length ? { ...a, spaceIds: [...a.spaceIds, ...extra] } : a;
-    }),
-  };
+  const named =
+    patch.size === 0 && joins.size === 0
+      ? storey
+      : {
+          ...storey,
+          spaces: storey.spaces.map((s) => (patch.has(s.id) ? { ...s, ...patch.get(s.id)! } : s)),
+          apartments: storey.apartments.map((a) => {
+            const extra = [...joins].filter(([, apt]) => apt === a.id).map(([id]) => id);
+            return extra.length ? { ...a, spaceIds: [...a.spaceIds, ...extra] } : a;
+          }),
+        };
+  return addBalconyDoors(structure, named, list);
+}
+
+/**
+ * Puts a door into every balcony and loggia that asks for one and has no door
+ * at all yet: in the outside wall between it and the room behind, in the
+ * middle where there is room. One moved elsewhere stays where it was put.
+ */
+function addBalconyDoors(structure: Structure, storey: Storey, list: Balcony[]): Storey {
+  let next = storey;
+  for (const b of list) {
+    if (!b.door) continue;
+    const line = facadeLine(structure, b.edge)!;
+    const mid = b.offset + b.width / 2;
+    let linked = linkSpaces(next);
+    const inside = facadePoint(line, mid, b.kind === "balcony" ? b.depth / 2 : -b.depth / 2);
+    const space = next.spaces.find((s) => {
+      const face = linked.faceBySpaceId.get(s.id);
+      return face !== undefined && pointInPolygon(inside, face.outer, face.holes);
+    });
+    if (!space) continue;
+    const opensOnto = (st: Storey, o: Opening, l: LinkedSpaces) =>
+      o.kind === "door" && openingSides(st, o, l).includes(space.id);
+    if (next.openings.some((o) => opensOnto(next, o, linked))) continue;
+    // The outside wall behind it: the facade for a balcony, the back of the cut for a loggia.
+    const back = (b.kind === "balcony" ? 0 : -b.depth) - structure.wallThickness / 2;
+    const at = locateOnWall(next, facadePoint(line, mid, back), structure.wallThickness / 2);
+    if (!at || next.walls.find((w) => w.id === at.wallId)?.part !== "shell") continue;
+    const placed = addOpening(next, at.wallId, "door", at.offset, { width: b.door.width, height: b.door.height, sill: 0 });
+    if (placed === next) continue;
+    linked = linkSpaces(placed);
+    // It must open onto this balcony, not slide off beside it.
+    if (!opensOnto(placed, placed.openings.at(-1)!, linked)) continue;
+    next = placed;
+  }
+  return next;
 }
 
 /** Names the rooms the core rectangles enclose, where they are still unnamed. */

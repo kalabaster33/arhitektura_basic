@@ -322,6 +322,7 @@ function BalconyList(props: {
         width,
         depth: config.depth,
         railing: config.railing,
+        door: { ...config.door },
       });
       if (r.id) {
         setProblem(null);
@@ -384,6 +385,14 @@ function BalconyList(props: {
                   />
                   <LengthField label="Railing" value={b.railing} min={0.01} onCommit={(v) => update(b.id, { railing: v })} />
                 </div>
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={b.door !== undefined}
+                    onChange={(e) => update(b.id, { door: e.target.checked ? { ...config.door } : undefined })}
+                  />
+                  Door from the room behind ({(b.door ?? config.door).width.toFixed(2)} m)
+                </label>
                 {problem?.id === b.id && <p className="hint is-bad">{problem.text}</p>}
                 {issue && <p className="hint is-bad">{issue.message}</p>}
               </li>
@@ -403,7 +412,9 @@ function BalconyList(props: {
       <p className="hint">
         On every storey above the ground floor, at the facade of that storey. &ldquo;From the corner&rdquo; is
         measured along the side from its first corner. A balcony is checked against the setbacks of the
-        plot; a loggia lies inside the building. Each one joins the apartment behind it.
+        plot; a loggia lies inside the building. Each one joins the apartment behind it and, while
+        &ldquo;Door&rdquo; is ticked and it has no door, gets one from the room behind; a door you move
+        stays where you put it.
       </p>
     </>
   );

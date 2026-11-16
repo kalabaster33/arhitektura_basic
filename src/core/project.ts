@@ -228,7 +228,16 @@ function cleanBalconies(raw: unknown): { balconies?: Balcony[] } {
         Number.isInteger(b.edge) &&
         [b.offset, b.width, b.depth, b.railing].every(num),
     )
-    .map((b: any) => ({ id: b.id, kind: b.kind, edge: b.edge, offset: b.offset, width: b.width, depth: b.depth, railing: b.railing }));
+    .map((b: any) => ({
+      id: b.id,
+      kind: b.kind,
+      edge: b.edge,
+      offset: b.offset,
+      width: b.width,
+      depth: b.depth,
+      railing: b.railing,
+      ...(b.door?.width > 0 && b.door?.height > 0 ? { door: { width: b.door.width, height: b.door.height } } : {}),
+    }));
   return balconies.length ? { balconies } : {};
 }
 
