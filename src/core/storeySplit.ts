@@ -1214,6 +1214,14 @@ export function proposeSplits(
   if (items.length === 0) return { ok: false, reason: "Add at least one apartment to the mix.", usable, wanted };
   if (items.length > 16) return { ok: false, reason: "At most 16 apartments per storey.", usable, wanted };
   if (units.some((u) => !(u.area > 0))) return { ok: false, reason: "Every apartment type needs an area.", usable, wanted };
+  if (storey.walls.some((w) => w.loadBearing && !w.part)) {
+    return {
+      ok: false,
+      reason: "This storey has load-bearing walls, and a new storey plan would remove them. Turn the flag off on them first.",
+      usable,
+      wanted,
+    };
+  }
 
   const base = emptiedStorey(storey, building);
   const modes: Access[] = access === "auto" ? ["hall", "corridor"] : [access];

@@ -172,6 +172,25 @@ export function setWallKind(storey: Storey, id: string, kind: WallKind): Storey 
   return { ...storey, walls: storey.walls.map((w) => (w.id === id ? { ...w, kind } : w)) };
 }
 
+/**
+ * Marks a wall drawn by hand as load-bearing, or not. Turning it on removes
+ * the doors and windows in it, since a load-bearing wall takes none. The
+ * generated outside and core walls are always load-bearing and are not changed.
+ */
+export function setWallLoadBearing(storey: Storey, id: string, on: boolean): Storey {
+  const wall = storey.walls.find((w) => w.id === id);
+  if (!wall || wall.part || (wall.loadBearing === true) === on) return storey;
+  const walls = storey.walls.map((w) => {
+    if (w.id !== id) return w;
+    const next = { ...w };
+    if (on) next.loadBearing = true;
+    else delete next.loadBearing;
+    return next;
+  });
+  const openings = on ? storey.openings.filter((o) => o.wallId !== id) : storey.openings;
+  return { ...storey, walls, openings };
+}
+
 export function updateSpace(
   storey: Storey,
   id: string,

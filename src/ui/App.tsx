@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import annotationStyleJson from "../config/annotationStyle.json";
 import areaDefinitions from "../config/areaDefinitions.json";
 import dimensionStyleJson from "../config/dimensionStyle.json";
+import bearingJson from "../config/bearingCheck.json";
 import columnsJson from "../config/columns.json";
 import coreAlignment from "../config/coreAlignment.json";
 import editorDefaults from "../config/editorDefaults.json";
@@ -40,6 +41,7 @@ import {
   sortedStoreys,
   updateStoreyInfo,
 } from "../core/building.ts";
+import { checkBearing, parseBearingConfig } from "../core/bearing.ts";
 import { parseColumnConfig } from "../core/columns.ts";
 import { checkCoreAlignment, coreOutlines, parseCoreConfig } from "../core/coreAlignment.ts";
 import { checkBuildingPlan, parseRoomCheckConfig } from "../core/checks.ts";
@@ -102,11 +104,12 @@ import { useProjectStore } from "./useProjectStore.ts";
 import { StoreyPlanPanel } from "./StoreyPlanPanel.tsx";
 import { RuleReport } from "./RuleReport.tsx";
 import type { RuleCheck } from "../roomSubdivision.ts";
-import { ColumnsPanel, CorePanel, ErkerPanel, LocationPanel, OutlinePanel, Stepper } from "./WorkflowPanels.tsx";
+import { BearingPanel, ColumnsPanel, CorePanel, ErkerPanel, LocationPanel, OutlinePanel, Stepper } from "./WorkflowPanels.tsx";
 
 const areaConfig = parseAreaConfig(areaDefinitions);
 const coreConfig = parseCoreConfig(coreAlignment);
 const columnConfig = parseColumnConfig(columnsJson);
+const bearingConfig = parseBearingConfig(bearingJson);
 const roomCheckConfig = parseRoomCheckConfig(roomChecks);
 const defaultRulesDoc = rulesDoc(layoutRules);
 const siteRules = parseSiteRules(siteRulesJson);
@@ -249,6 +252,7 @@ export function App() {
   }, [mix]);
   const [access, setAccess] = useState<Access | "auto">("auto");
   const [alsoSimilar, setAlsoSimilar] = useState(true);
+  const [showCentres, setShowCentres] = useState(true);
   const [splitBusy, setSplitBusy] = useState(false);
   const [splitError, setSplitError] = useState<string | null>(null);
   const [generatingAll, setGeneratingAll] = useState<string | null>(null);
@@ -392,6 +396,16 @@ export function App() {
     }
     return { coreGhosts: ghosts, flaggedSpaceIds: flagged };
   }, [coreIssues, storey.id, below, above]);
+
+  // ------------------------------------------------------- load-bearing walls
+  const bearing = useMemo(() => checkBearing(building, storey, bearingConfig), [building, storey]);
+  const bearingFailing = useMemo(
+    () =>
+      storeys
+        .filter((s) => s.id !== storey.id && checkBearing(building, s, bearingConfig).problems.length > 0)
+        .map((s) => ({ id: s.id, name: s.name })),
+    [building, storeys, storey.id],
+  );
 
   const openStorey = (id: string) => {
     setActiveStoreyId(id);
@@ -919,6 +933,11 @@ export function App() {
             north={project.site.north}
             structure={structure}
             outline={storeyOutline(building, storey.id)}
+            bearingCentres={
+              stage === "apartments" && showCentres && bearing.centreOfMass
+                ? { mass: bearing.centreOfMass, stiffness: bearing.centreOfStiffness, bad: bearing.problems.length > 0 }
+                : null
+            }
             erkerOutline={
               hasOutline && isGroundStorey(building, storey.id) && upperOutline(structure) !== structure.footprint
                 ? upperOutline(structure)
@@ -1055,6 +1074,15 @@ export function App() {
                 error={splitError}
                 disabled={previewing || usable === null}
                 onGenerate={generateSplit}
+              />
+              <BearingPanel
+                storeyName={storey.name}
+                bearingWalls={storey.walls.filter((w) => w.loadBearing).length}
+                result={bearing}
+                failing={bearingFailing}
+                showCentres={showCentres}
+                onShowCentres={setShowCentres}
+                onOpenStorey={openStorey}
               />
               <ColumnsPanel
                 project={project}

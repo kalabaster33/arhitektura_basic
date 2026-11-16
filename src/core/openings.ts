@@ -3,8 +3,8 @@
  * from the wall's `a` end to its centre.
  *
  * An opening has to fit in a free stretch of its wall: inside the wall's
- * length, clear of every wall that joins or crosses it, and clear of the other
- * openings. Operations that would break that return the storey unchanged or
+ * length, clear of every wall that joins or crosses it, of the columns and of
+ * the other openings. A load-bearing wall drawn by hand has no free stretch. Operations that would break that return the storey unchanged or
  * move the opening to the nearest place where it fits.
  */
 import {
@@ -80,6 +80,8 @@ function freeSpans(
   ignoreOpeningId?: string,
   columns?: readonly Column[],
 ): [number, number][] {
+  // A load-bearing wall takes no openings at all.
+  if (wall.loadBearing && !wall.part) return [];
   const length = dist(wall.a, wall.b);
   const blocked: [number, number][] = columnSpansOnWall(wall, columns);
   for (const other of walls) {

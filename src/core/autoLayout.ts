@@ -220,8 +220,12 @@ export function buildLayoutInput(storey: Storey, apartmentId: string): LayoutInp
   if (!apartment) return no("No such apartment.");
   if (apartment.spaceIds.length === 0) return no("It has no rooms yet.");
 
+  const interior = apartmentInteriorWalls(storey, apartmentId);
+  if (storey.walls.some((w) => w.loadBearing && interior.includes(w.id))) {
+    return no("A load-bearing wall stands inside it, and a new layout would remove it. Lay out its rooms by hand.");
+  }
   let shell = storey;
-  for (const id of apartmentInteriorWalls(storey, apartmentId)) shell = deleteWall(shell, id);
+  for (const id of interior) shell = deleteWall(shell, id);
   const emptied = shell.apartments.find((a) => a.id === apartmentId)!;
   if (emptied.spaceIds.length !== 1) {
     return no("Its rooms do not adjoin, or a wall between them also bounds another room.");

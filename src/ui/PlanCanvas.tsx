@@ -143,6 +143,8 @@ interface Props {
   outline: Pt[];
   /** Outline of the storeys above, shown on the ground floor where they project; null when they do not. */
   erkerOutline: Pt[] | null;
+  /** Centre of mass and centre of stiffness of the storey, marked on the plan; null to hide them. */
+  bearingCentres?: { mass: Pt; stiffness: Pt | null; bad: boolean } | null;
   /** The map shown under the plan, with the plan's origin on the earth; null for no map. */
   map: { origin: GeoLocation; settings: MapSettings } | null;
   /** Size of the door the entrance tool places. */
@@ -958,7 +960,7 @@ export function PlanCanvas(props: Props) {
             y2={w.b.y}
             strokeWidth={Math.max(w.thickness, 2 * px)}
             strokeLinecap="square"
-            className={`wall wall--${w.kind}${selectedWall?.id === w.id ? " is-selected" : ""}`}
+            className={`wall wall--${w.kind}${w.loadBearing ? " wall--bearing" : ""}${selectedWall?.id === w.id ? " is-selected" : ""}`}
             pointerEvents="none"
           />
         ))}
@@ -1042,6 +1044,41 @@ export function PlanCanvas(props: Props) {
             </text>
           );
         })}
+
+        {props.bearingCentres && (
+          <g className={`bearing-centres${props.bearingCentres.bad ? " is-bad" : ""}`} pointerEvents="none">
+            {props.bearingCentres.stiffness && (
+              <line
+                x1={props.bearingCentres.mass.x}
+                y1={props.bearingCentres.mass.y}
+                x2={props.bearingCentres.stiffness.x}
+                y2={props.bearingCentres.stiffness.y}
+                strokeWidth={1.5 * px}
+                strokeDasharray={`${4 * px} ${3 * px}`}
+              />
+            )}
+            <g>
+              <title>Centre of mass</title>
+              <circle cx={props.bearingCentres.mass.x} cy={props.bearingCentres.mass.y} r={7 * px} strokeWidth={1.5 * px} />
+              <path
+                d={`M${props.bearingCentres.mass.x - 7 * px},${props.bearingCentres.mass.y}h${14 * px}M${props.bearingCentres.mass.x},${props.bearingCentres.mass.y - 7 * px}v${14 * px}`}
+                strokeWidth={1.5 * px}
+              />
+            </g>
+            {props.bearingCentres.stiffness && (
+              <rect
+                x={props.bearingCentres.stiffness.x - 5 * px}
+                y={props.bearingCentres.stiffness.y - 5 * px}
+                width={10 * px}
+                height={10 * px}
+                strokeWidth={1.5 * px}
+                className="bearing-centres__stiffness"
+              >
+                <title>Centre of stiffness</title>
+              </rect>
+            )}
+          </g>
+        )}
 
         {props.coreGhosts.map((g) => (
           <path

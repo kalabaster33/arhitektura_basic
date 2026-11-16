@@ -256,6 +256,24 @@ input.is-invalid {
   opacity: 0.55;
 }
 
+.wall--bearing {
+  stroke: #7a2e1d;
+}
+
+.bearing-centres {
+  fill: none;
+  stroke: #1d6b3a;
+}
+
+.bearing-centres.is-bad {
+  stroke: #b3261e;
+}
+
+.bearing-centres__stiffness {
+  fill: currentColor;
+  fill-opacity: 0.25;
+}
+
 .column {
   fill: #1f2229;
   stroke: #1f2229;
@@ -1650,3 +1668,21 @@ input.is-invalid {
   width: 64px;
 }
 .room--yard { fill: #e3efd9; }
+
+.bearing-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 6px 0;
+  font-size: 12px;
+}
+
+.bearing-table th,
+.bearing-table td {
+  padding: 2px 4px;
+  text-align: right;
+}
+
+.bearing-table tbody th {
+  text-align: left;
+  font-weight: normal;
+}

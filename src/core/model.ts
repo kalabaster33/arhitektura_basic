@@ -25,6 +25,12 @@ export interface Wall {
    * are rebuilt from the structure, not edited by hand.
    */
   part?: "shell" | "core";
+  /**
+   * A wall drawn by hand that carries the building. No door or window may be
+   * put in it, and the generators leave it alone. The outside and core walls
+   * count as load-bearing without this flag.
+   */
+  loadBearing?: boolean;
 }
 
 export type OpeningKind = "door" | "window";

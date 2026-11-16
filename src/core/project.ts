@@ -265,9 +265,11 @@ export function parseProject(json: string): Project {
           typeof w.id === "string" &&
           [w.a?.x, w.a?.y, w.b?.x, w.b?.y, w.thickness].every(Number.isFinite);
         if (!ok) throw new Error(`Storey "${s.name}" contains a damaged wall.`);
+        if (w.loadBearing !== true || w.part) delete w.loadBearing;
       }
       // An opening is no use without its wall or its size; leave such ones out.
-      const wallIds = new Set(s.walls.map((w: Wall) => w.id));
+      // A load-bearing wall takes no openings.
+      const wallIds = new Set(s.walls.filter((w: Wall) => !w.loadBearing).map((w: Wall) => w.id));
       s.openings = s.openings.filter(
         (o: any) =>
           typeof o?.id === "string" &&

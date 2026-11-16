@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { type AreaConfig, formatArea } from "../core/areas.ts";
+import type { BearingResult } from "../core/bearing.ts";
 import { type ColumnConfig, proposeColumns } from "../core/columns.ts";
 import { formatLatLon } from "../core/geo.ts";
 import { type CoreElement, type CoreKind, type Project, type Stage, type Storey, STAGES } from "../core/model.ts";
@@ -420,6 +421,94 @@ export function ColumnsPanel(props: {
       {note && <p className="hint">{note}</p>}
       <p className="hint hint--warn">
         A first grid to work from, not a structural design — to be verified by a licensed engineer.
+      </p>
+    </section>
+  );
+}
+
+/**
+ * Load-bearing walls: how many there are on this storey, and whether they are
+ * spread evenly enough that the storey does not twist (centre of stiffness
+ * against centre of mass), here and on the other storeys.
+ */
+export function BearingPanel(props: {
+  storeyName: string;
+  bearingWalls: number;
+  result: BearingResult;
+  /** The other storeys that do not pass, by id and name. */
+  failing: { id: string; name: string }[];
+  showCentres: boolean;
+  onShowCentres: (on: boolean) => void;
+  onOpenStorey: (id: string) => void;
+}) {
+  const { result } = props;
+  const m = (v: number) => `${v.toFixed(2)} m`;
+  return (
+    <section className="panel">
+      <h2>
+        Load-bearing walls <small>{result.problems.length === 0 ? "passes" : "does not pass"}</small>
+      </h2>
+      <p className="hint">
+        {props.bearingWalls > 0
+          ? `${props.bearingWalls} wall${props.bearingWalls > 1 ? "s" : ""} marked load-bearing on ${props.storeyName}.`
+          : `No wall marked load-bearing on ${props.storeyName}.`}{" "}
+        Select a wall to mark it. The outside walls, the core walls and the columns always count.
+      </p>
+      {result.eccentricity && result.radius && (
+        <table className="bearing-table">
+          <thead>
+            <tr>
+              <th />
+              <th>along x</th>
+              <th>along y</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th>Eccentricity</th>
+              <td>{m(result.eccentricity.x)}</td>
+              <td>{m(result.eccentricity.y)}</td>
+            </tr>
+            <tr>
+              <th>Torsional radius</th>
+              <td>{m(result.radius.x)}</td>
+              <td>{m(result.radius.y)}</td>
+            </tr>
+            <tr>
+              <th>Radius of gyration</th>
+              <td colSpan={2}>{m(result.gyration!)}</td>
+            </tr>
+          </tbody>
+        </table>
+      )}
+      {result.problems.length === 0 ? (
+        <p className="ok">The load-bearing walls are spread evenly enough on this storey.</p>
+      ) : (
+        <ul className="warnings">
+          {result.problems.map((text) => (
+            <li key={text}>{text}</li>
+          ))}
+        </ul>
+      )}
+      {props.failing.length > 0 && (
+        <>
+          <p className="hint">Also not passing:</p>
+          <ul className="warnings">
+            {props.failing.map((f) => (
+              <li key={f.id}>
+                <button onClick={() => props.onOpenStorey(f.id)}>{f.name}</button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <label className="check">
+        <input type="checkbox" checked={props.showCentres} onChange={(e) => props.onShowCentres(e.target.checked)} />
+        Show the centre of mass (circle) and of stiffness (square) on the plan
+      </label>
+      <p className="hint hint--warn">
+        A first check after Eurocode 8 (EN 1998-1, 4.2.3.2), not a structural calculation — to be verified by a
+        licensed engineer (src/config/bearingCheck.json).
       </p>
     </section>
   );

@@ -22,7 +22,7 @@ import { type ElevationIssue, moveBuilding } from "../core/building.ts";
 import type { PlanIssue } from "../core/checks.ts";
 import type { CoreIssue } from "../core/coreAlignment.ts";
 import { type DimensionStyle, deleteDimension, formatDimension } from "../core/dimensions.ts";
-import { moveNode, setWallKind, setWallLength, setWallThickness, updateSpace } from "../core/edit.ts";
+import { moveNode, setWallKind, setWallLength, setWallLoadBearing, setWallThickness, updateSpace } from "../core/edit.ts";
 import { type Pt, dist } from "../core/geometry.ts";
 import {
   type Annotations,
@@ -104,6 +104,7 @@ export function LengthField(props: {
 
 function WallPanel(props: { storey: Storey; wall: Wall; onChange: (s: Storey) => void }) {
   const { storey, wall, onChange } = props;
+  const bearingOpenings = storey.openings.filter((o) => o.wallId === wall.id).length;
   const end = (key: "a" | "b", axis: "x" | "y", label: string) => (
     <LengthField
       label={label}
@@ -139,6 +140,30 @@ function WallPanel(props: { storey: Storey; wall: Wall; onChange: (s: Storey) =>
           <option value="interior">interior</option>
         </select>
       </label>
+      {wall.part ? (
+        <p className="hint">
+          {wall.part === "shell" ? "An outside wall" : "A core wall"}: always counted as load-bearing; it is changed
+          through the structure.
+        </p>
+      ) : (
+        <>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={wall.loadBearing === true}
+              onChange={(e) => onChange(setWallLoadBearing(storey, wall.id, e.target.checked))}
+            />
+            Load-bearing
+          </label>
+          <p className="hint">
+            {wall.loadBearing
+              ? "Takes no doors or windows, and the storey and room generators leave it alone."
+              : bearingOpenings > 0
+                ? `Marking it load-bearing removes its ${bearingOpenings} door${bearingOpenings > 1 ? "s and windows" : " or window"}.`
+                : "A load-bearing wall takes no doors or windows."}
+          </p>
+        </>
+      )}
       <div className="field-grid">
         {end("a", "x", "Start x")}
         {end("a", "y", "Start y")}
