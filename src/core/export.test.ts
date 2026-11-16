@@ -23,6 +23,7 @@ import { addOpening } from "./openings.ts";
 import { createSampleProject, getActiveStorey, replaceStorey } from "./project.ts";
 import { buildSheets, layoutSheet, parseExportConfig, sheetsThatDoNotFit } from "./sheets.ts";
 import { analyseSite, parseSiteRules, regionArea, setBoundary, setSetback } from "./site.ts";
+import { setColumns } from "./structure.ts";
 
 const areaConfig = parseAreaConfig(areaDefinitions);
 const siteRules = parseSiteRules(siteRulesJson);
@@ -231,7 +232,8 @@ describe("sheets", () => {
 
 describe("DXF", () => {
   it("is a complete file with a layer for every kind of line", () => {
-    const project = withSite();
+    const sited = withSite();
+    const project = setColumns(sited, sited.site.buildings[0].id, [{ at: { x: 1, y: 1 }, w: 0.3, d: 0.3 }]);
     const dxf = writeDxf(
       buildSheets(
         project,

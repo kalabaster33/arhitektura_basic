@@ -15,6 +15,7 @@ import type { Region, SiteAnalysis } from "./site.ts";
 
 export const LAYER_KEYS = [
   "walls",
+  "columns",
   "doors",
   "windows",
   "rooms",
@@ -187,8 +188,23 @@ export function wallRegion(storey: Pick<Storey, "walls" | "openings">): Region {
   return toRegion(gaps.length ? difference(merged, ...gaps) : merged);
 }
 
+/** The columns of a storey as one shape; columns that touch are merged. */
+export function columnRegion(storey: Pick<Storey, "columns">): Region {
+  const rects = (storey.columns ?? [])
+    .filter((c) => c.w > 0 && c.d > 0)
+    .map((c) =>
+      toPoly([
+        { x: c.at.x - c.w / 2, y: c.at.y - c.d / 2 },
+        { x: c.at.x + c.w / 2, y: c.at.y - c.d / 2 },
+        { x: c.at.x + c.w / 2, y: c.at.y + c.d / 2 },
+        { x: c.at.x - c.w / 2, y: c.at.y + c.d / 2 },
+      ]),
+    );
+  return rects.length ? toRegion(union(rects[0], ...rects.slice(1))) : [];
+}
+
 /**
- * One storey: walls, door and window symbols, and a label in every room with
+ * One storey: walls, columns, door and window symbols, and a label in every room with
  * its name, its net area and, where it has one, its apartment.
  * `textHeight` is the height of the lettering in metres.
  */
@@ -196,6 +212,8 @@ export function storeyDrawing(storey: Storey, areaConfig: AreaConfig, textHeight
   const entities: Entity[] = [];
   const walls = wallRegion(storey);
   if (walls.length) entities.push({ kind: "region", layer: "walls", region: walls, filled: true });
+  const columns = columnRegion(storey);
+  if (columns.length) entities.push({ kind: "region", layer: "columns", region: columns, filled: true });
 
   for (const o of storey.openings) {
     const wall = storey.walls.find((w) => w.id === o.wallId);

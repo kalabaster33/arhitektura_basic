@@ -14,6 +14,7 @@ import { type Pt, offsetRingLeft, pointInPolygon, pointInRing, ringSignedArea, s
 import { newId } from "./ids.ts";
 import {
   type Building,
+  type Column,
   type CoreElement,
   type CoreKind,
   type Project,
@@ -24,7 +25,7 @@ import {
   type Wall,
   STAGES,
 } from "./model.ts";
-import { type OpeningSize, addOpening } from "./openings.ts";
+import { type OpeningSize, addOpening, reconcileOpenings } from "./openings.ts";
 import { boundaryProblem } from "./site.ts";
 import { linkSpaces, syncCirculation } from "./spaces.ts";
 
@@ -174,15 +175,32 @@ function withBuilding(project: Project, building: Building): Project {
   };
 }
 
+const sameColumns = (a: Column[] | undefined, b: Column[] | undefined): boolean =>
+  JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
+
+/**
+ * Gives a storey the columns of the structure. Doors and windows a column now
+ * stands in are moved aside along their wall, or dropped where there is no
+ * room left for them.
+ */
+function placeColumns(storey: Storey, columns: Column[] | undefined): Storey {
+  if (sameColumns(storey.columns, columns)) return storey;
+  const next: Storey = { ...storey };
+  if (columns?.length) next.columns = columns.map((c) => ({ ...c, at: { ...c.at } }));
+  else delete next.columns;
+  return reconcileOpenings(storey, next);
+}
+
 /**
  * Draws the structure on every storey again: the outside walls from the
- * outline of that storey and the walls of the hall, stairs and elevator.
- * Walls drawn by hand stay; doors and windows stay where they stood.
+ * outline of that storey, the walls of the hall, stairs and elevator, and the
+ * columns. Walls drawn by hand stay; doors and windows stay where they stood.
  */
 export function rebuildStructure(project: Project, buildingId: string): Project {
   const building = project.site.buildings.find((b) => b.id === buildingId);
   if (!building) return project;
-  const storeys = building.storeys.map((storey) => {
+  const storeys = building.storeys.map((original) => {
+    const storey = placeColumns(original, building.structure.columns);
     const generated = generatedWalls(building, storey);
     const own = storey.walls.filter((w) => !w.part);
     if (generated.length === 0 && own.length === storey.walls.length) return storey;
@@ -323,6 +341,30 @@ export function removeCoreElement(project: Project, buildingId: string, id: stri
   return withStructure(withBuilding(project, { ...building, storeys }), buildingId, {
     core: structure.core.filter((c) => c.id !== id),
   });
+}
+
+/**
+ * Gives the building these columns, replacing the ones it had, and places
+ * them on every storey. Columns without a positive size are left out.
+ */
+export function setColumns(
+  project: Project,
+  buildingId: string,
+  columns: { at: Pt; w: number; d: number }[],
+): Project {
+  if (!structureOf(project, buildingId)) return project;
+  const clean: Column[] = columns
+    .filter((c) => c.w > 0 && c.d > 0 && Number.isFinite(c.at.x) && Number.isFinite(c.at.y))
+    .map((c) => ({ id: newId("column"), at: roundPt(c.at), w: round(c.w), d: round(c.d) }));
+  return withStructure(project, buildingId, { columns: clean.length ? clean : undefined });
+}
+
+/** Removes one column from every storey. */
+export function removeColumn(project: Project, buildingId: string, id: string): Project {
+  const structure = structureOf(project, buildingId);
+  if (!structure?.columns?.some((c) => c.id === id)) return project;
+  const rest = structure.columns.filter((c) => c.id !== id);
+  return withStructure(project, buildingId, { columns: rest.length ? rest : undefined });
 }
 
 /** Places an entrance door in a wall; unchanged if it does not fit there. */

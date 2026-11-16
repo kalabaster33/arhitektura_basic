@@ -117,8 +117,8 @@ export async function writePdf(
       doc.setLineDashPattern([], 0);
       switch (e.kind) {
         case "region": {
-          // Walls are filled dark, the footprint on the site plan light.
-          const grey = e.layer === "walls" ? 110 : 222;
+          // Columns are filled darkest, walls dark, the footprint on the site plan light.
+          const grey = e.layer === "columns" ? 40 : e.layer === "walls" ? 110 : 222;
           doc.setFillColor(grey, grey, grey);
           for (const poly of e.region) for (const ring of poly) if (ring.length >= 3) trace(ring, true);
           if (e.filled) doc.fillStrokeEvenOdd();

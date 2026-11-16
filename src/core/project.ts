@@ -3,6 +3,7 @@ import type { Pt } from "./geometry.ts";
 import { newId } from "./ids.ts";
 import {
   type Building,
+  type Column,
   type Project,
   type Storey,
   type Structure,
@@ -210,7 +211,16 @@ function cleanStructure(raw: any): Structure {
           typeof c?.id === "string" && ["hall", "stair", "elevator"].includes(c.kind) && isPt(c.a) && isPt(c.b),
       )
       .map((c: any) => ({ id: c.id, kind: c.kind, a: { x: c.a.x, y: c.a.y }, b: { x: c.b.x, y: c.b.y } })),
+    ...cleanColumns(raw?.columns),
   };
+}
+
+/** Columns read from a file, damaged ones left out; nothing when there are none. */
+function cleanColumns(raw: unknown): { columns?: Column[] } {
+  const columns = (Array.isArray(raw) ? raw : [])
+    .filter((c: any) => typeof c?.id === "string" && isPt(c.at) && c.w > 0 && c.d > 0 && Number.isFinite(c.w + c.d))
+    .map((c: any) => ({ id: c.id, at: { x: c.at.x, y: c.at.y }, w: c.w, d: c.d }));
+  return columns.length ? { columns } : {};
 }
 
 /** Parses a saved project; throws a readable error when the file cannot be used. */
@@ -244,6 +254,9 @@ export function parseProject(json: string): Project {
     }
     b.structure = cleanStructure(b.structure);
     for (const s of b.storeys) {
+      // Every storey carries the columns of its structure; never a copy of its own.
+      if (b.structure.columns) s.columns = b.structure.columns.map((c: Column) => ({ ...c, at: { ...c.at } }));
+      else delete s.columns;
       for (const key of ["walls", "openings", "spaces", "apartments", "circulation"]) {
         if (!Array.isArray(s[key])) throw new Error(`Storey "${s.name}" has no "${key}" list.`);
       }

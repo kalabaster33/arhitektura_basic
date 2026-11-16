@@ -118,6 +118,18 @@ export interface Dimension {
   offset: number;
 }
 
+/**
+ * A column: a rectangle of width `w` (along x) and depth `d` (along y) centred
+ * on `at`. Columns belong to the structure and stand in the same place on
+ * every storey; doors and windows are kept clear of them.
+ */
+export interface Column {
+  id: string;
+  at: Pt;
+  w: number;
+  d: number;
+}
+
 export interface Storey {
   id: string;
   name: string;
@@ -132,6 +144,11 @@ export interface Storey {
   circulation: CirculationElement[];
   /** Dimensions placed by hand. The automatic ones are worked out, not stored. */
   dimensions: Dimension[];
+  /**
+   * The columns of the building, copied from its structure (see
+   * structure.ts) so that work on one storey sees them. Absent when there are none.
+   */
+  columns?: Column[];
 }
 
 export type CoreKind = "hall" | "stair" | "elevator";
@@ -169,6 +186,8 @@ export interface Structure {
     edges: boolean[];
   };
   core: CoreElement[];
+  /** Columns, the same on every storey. Absent or empty when there are none. */
+  columns?: Column[];
 }
 
 export interface Building {

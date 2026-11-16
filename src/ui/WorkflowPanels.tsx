@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { type AreaConfig, formatArea } from "../core/areas.ts";
+import { type ColumnConfig, proposeColumns } from "../core/columns.ts";
 import { formatLatLon } from "../core/geo.ts";
-import { type CoreElement, type CoreKind, type Project, type Stage, STAGES } from "../core/model.ts";
+import { type CoreElement, type CoreKind, type Project, type Stage, type Storey, STAGES } from "../core/model.ts";
 import {
   type StructureStatus,
   clearFootprint,
@@ -10,6 +12,7 @@ import {
   ringPerimeter,
   setAllErkerEdges,
   setErkerDepth,
+  setColumns,
   setErkerEdge,
   setStructureThickness,
   stageBlocker,
@@ -348,6 +351,75 @@ export function CorePanel(props: {
         Elevator: choose the tool and drag a rectangle; it is drawn on every storey so the core lines
         up from floor to floor. Sizes are to the wall centrelines. The entrance door can be dragged
         along its wall with Select, and removed with Delete.
+      </p>
+    </section>
+  );
+}
+
+/**
+ * Columns: a grid proposed from the walls between the apartments of one
+ * storey, the same on every storey. Doors and windows are kept clear of them.
+ */
+export function ColumnsPanel(props: {
+  project: Project;
+  buildingId: string;
+  /** The storey the grid is read from. */
+  storey: Storey;
+  config: ColumnConfig;
+  disabled?: boolean;
+  onChange: (project: Project) => void;
+}) {
+  const { project, buildingId, storey } = props;
+  const building = project.site.buildings.find((b) => b.id === buildingId)!;
+  const count = building.structure.columns?.length ?? 0;
+  const [width, setWidth] = useState(props.config.width);
+  const [depth, setDepth] = useState(props.config.depth);
+  const [maxSpan, setMaxSpan] = useState(props.config.maxSpan);
+  const [note, setNote] = useState<string | null>(null);
+
+  const propose = () => {
+    const proposed = proposeColumns(building, storey, { ...props.config, width, depth, maxSpan });
+    if (proposed.length === 0) {
+      setNote("No columns could be placed: draw the building outline first.");
+      return;
+    }
+    const doorsBefore = building.storeys.reduce((n, s) => n + s.openings.length, 0);
+    const next = setColumns(project, buildingId, proposed);
+    const doorsAfter = next.site.buildings.find((b) => b.id === buildingId)!.storeys.reduce((n, s) => n + s.openings.length, 0);
+    const lost = doorsBefore - doorsAfter;
+    setNote(
+      lost > 0
+        ? `${proposed.length} columns placed. ${lost} door${lost > 1 ? "s or windows" : " or window"} had no room left beside a column and ${lost > 1 ? "were" : "was"} removed.`
+        : `${proposed.length} columns placed on every storey.`,
+    );
+    props.onChange(next);
+  };
+  const clear = () => {
+    setNote(null);
+    props.onChange(setColumns(project, buildingId, []));
+  };
+
+  return (
+    <section className="panel">
+      <h2>Columns</h2>
+      <p className="hint">
+        {count > 0 ? `${count} columns, the same on every storey.` : "No columns yet."} The grid is read from the
+        walls between the apartments of {storey.name}, the outside walls and the core.
+      </p>
+      <LengthField label="Column width (x)" value={width} min={0.05} onCommit={setWidth} />
+      <LengthField label="Column depth (y)" value={depth} min={0.05} onCommit={setDepth} />
+      <LengthField label="Largest span" value={maxSpan} min={1} onCommit={setMaxSpan} />
+      <button className="is-active" disabled={props.disabled} onClick={propose}>
+        {count > 0 ? "Propose the grid again" : "Propose columns"}
+      </button>{" "}
+      {count > 0 && (
+        <button disabled={props.disabled} onClick={clear}>
+          Remove all columns
+        </button>
+      )}
+      {note && <p className="hint">{note}</p>}
+      <p className="hint hint--warn">
+        A first grid to work from, not a structural design — to be verified by a licensed engineer.
       </p>
     </section>
   );

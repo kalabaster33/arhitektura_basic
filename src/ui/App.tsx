@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import annotationStyleJson from "../config/annotationStyle.json";
 import areaDefinitions from "../config/areaDefinitions.json";
 import dimensionStyleJson from "../config/dimensionStyle.json";
+import columnsJson from "../config/columns.json";
 import coreAlignment from "../config/coreAlignment.json";
 import editorDefaults from "../config/editorDefaults.json";
 import exportDefaults from "../config/exportDefaults.json";
@@ -39,6 +40,7 @@ import {
   sortedStoreys,
   updateStoreyInfo,
 } from "../core/building.ts";
+import { parseColumnConfig } from "../core/columns.ts";
 import { checkCoreAlignment, coreOutlines, parseCoreConfig } from "../core/coreAlignment.ts";
 import { checkBuildingPlan, parseRoomCheckConfig } from "../core/checks.ts";
 import { deleteWall } from "../core/edit.ts";
@@ -100,10 +102,11 @@ import { useProjectStore } from "./useProjectStore.ts";
 import { StoreyPlanPanel } from "./StoreyPlanPanel.tsx";
 import { RuleReport } from "./RuleReport.tsx";
 import type { RuleCheck } from "../roomSubdivision.ts";
-import { CorePanel, ErkerPanel, LocationPanel, OutlinePanel, Stepper } from "./WorkflowPanels.tsx";
+import { ColumnsPanel, CorePanel, ErkerPanel, LocationPanel, OutlinePanel, Stepper } from "./WorkflowPanels.tsx";
 
 const areaConfig = parseAreaConfig(areaDefinitions);
 const coreConfig = parseCoreConfig(coreAlignment);
+const columnConfig = parseColumnConfig(columnsJson);
 const roomCheckConfig = parseRoomCheckConfig(roomChecks);
 const defaultRulesDoc = rulesDoc(layoutRules);
 const siteRules = parseSiteRules(siteRulesJson);
@@ -1052,6 +1055,14 @@ export function App() {
                 error={splitError}
                 disabled={previewing || usable === null}
                 onGenerate={generateSplit}
+              />
+              <ColumnsPanel
+                project={project}
+                buildingId={building.id}
+                storey={realStorey}
+                config={columnConfig}
+                disabled={previewing}
+                onChange={(p) => setProject(p)}
               />
               <PlanChecksPanel
                 storey={storey}

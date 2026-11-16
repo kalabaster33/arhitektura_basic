@@ -18,7 +18,7 @@ import {
   projectParam,
 } from "./geometry.ts";
 import { newId } from "./ids.ts";
-import type { Opening, OpeningKind, Storey, Wall } from "./model.ts";
+import type { Column, Opening, OpeningKind, Storey, Wall } from "./model.ts";
 import { type LinkedSpaces, linkSpaces } from "./spaces.ts";
 
 const EPS = 1e-9;
@@ -32,7 +32,45 @@ export interface OpeningSize {
 
 /** Stretches of a wall, as distances from its `a` end, where an opening may sit. */
 export function wallFreeSpans(storey: Storey, wall: Wall): [number, number][] {
-  return freeSpans(storey.walls, storey.openings, wall);
+  return freeSpans(storey.walls, storey.openings, wall, undefined, storey.columns);
+}
+
+/**
+ * The stretches of a wall, as distances from its `a` end, that columns stand
+ * in: where the wall's band (its centreline widened to its thickness) passes
+ * through a column. Sorted, not merged.
+ */
+export function columnSpansOnWall(wall: Wall, columns: readonly Column[] | undefined): [number, number][] {
+  const length = dist(wall.a, wall.b);
+  if (!columns?.length || length < EPS) return [];
+  const dir = { x: (wall.b.x - wall.a.x) / length, y: (wall.b.y - wall.a.y) / length };
+  const half = wall.thickness / 2;
+  const spans: [number, number][] = [];
+  for (const c of columns) {
+    // The column widened across the wall by half its thickness, so a column
+    // touching only a wall face still counts.
+    const gx = half * Math.abs(dir.y);
+    const gy = half * Math.abs(dir.x);
+    const min = { x: c.at.x - c.w / 2 - gx, y: c.at.y - c.d / 2 - gy };
+    const max = { x: c.at.x + c.w / 2 + gx, y: c.at.y + c.d / 2 + gy };
+    // Liang-Barsky: the part of the centreline inside the rectangle.
+    let lo = 0;
+    let hi = length;
+    const clip = (p: number, q: number): boolean => {
+      if (Math.abs(p) < EPS) return q >= -EPS;
+      const r = q / p;
+      if (p < 0) lo = Math.max(lo, r);
+      else hi = Math.min(hi, r);
+      return lo <= hi + EPS;
+    };
+    const ok =
+      clip(-dir.x, wall.a.x - min.x) &&
+      clip(dir.x, max.x - wall.a.x) &&
+      clip(-dir.y, wall.a.y - min.y) &&
+      clip(dir.y, max.y - wall.a.y);
+    if (ok && hi - lo > EPS) spans.push([lo, hi]);
+  }
+  return spans.sort((p, q) => p[0] - q[0]);
 }
 
 function freeSpans(
@@ -40,9 +78,10 @@ function freeSpans(
   openings: Opening[],
   wall: Wall,
   ignoreOpeningId?: string,
+  columns?: readonly Column[],
 ): [number, number][] {
   const length = dist(wall.a, wall.b);
-  const blocked: [number, number][] = [];
+  const blocked: [number, number][] = columnSpansOnWall(wall, columns);
   for (const other of walls) {
     if (other.id === wall.id) continue;
     const half = other.thickness / 2;
@@ -79,11 +118,12 @@ function fit(
   offset: number,
   width: number,
   ignoreOpeningId?: string,
+  columns?: readonly Column[],
 ): number | null {
   const wall = walls.find((w) => w.id === wallId);
   if (!wall || !(width > 0) || !Number.isFinite(offset)) return null;
   let best: number | null = null;
-  for (const [start, end] of freeSpans(walls, openings, wall, ignoreOpeningId)) {
+  for (const [start, end] of freeSpans(walls, openings, wall, ignoreOpeningId, columns)) {
     if (end - start < width - 1e-6) continue;
     const lo = start + width / 2;
     const hi = Math.max(lo, end - width / 2);
@@ -104,7 +144,7 @@ export function fitOffset(
   width: number,
   ignoreOpeningId?: string,
 ): number | null {
-  return fit(storey.walls, storey.openings, wallId, offset, width, ignoreOpeningId);
+  return fit(storey.walls, storey.openings, wallId, offset, width, ignoreOpeningId, storey.columns);
 }
 
 /** Adds a door or window as near to `offset` as it fits; unchanged if it cannot fit. */
@@ -168,7 +208,7 @@ export function deleteOpening(storey: Storey, id: string): Storey {
 }
 
 /**
- * After the walls have changed: keeps every opening where it stood in the plan
+ * After the walls (or the columns) have changed: keeps every opening where it stood in the plan
  * (not at the same distance from the wall end), moves it aside if a wall now
  * joins there, and drops it when its wall is gone or has no room left for it.
  */
@@ -192,7 +232,7 @@ export function reconcileOpenings(before: Storey, after: Storey): Storey {
         wanted = projectParam(world, wall.a, wall.b) * dist(wall.a, wall.b);
       }
     }
-    const at = fit(after.walls, placed, o.wallId, wanted, o.width);
+    const at = fit(after.walls, placed, o.wallId, wanted, o.width, undefined, after.columns);
     if (at === null) {
       changed = true;
       continue;

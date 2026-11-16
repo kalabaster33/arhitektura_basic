@@ -14,6 +14,7 @@
   "textHeightMm": 2.5,
   "lineWeightMm": {
     "walls": 0.35,
+    "columns": 0.35,
     "doors": 0.18,
     "windows": 0.18,
     "rooms": 0.18,
@@ -27,6 +28,7 @@
   },
   "layers": {
     "walls": { "name": "A-WALL", "color": 7 },
+    "columns": { "name": "S-COLS", "color": 7 },
     "doors": { "name": "A-DOOR", "color": 4 },
     "windows": { "name": "A-GLAZ", "color": 5 },
     "rooms": { "name": "A-AREA-IDEN", "color": 8 },

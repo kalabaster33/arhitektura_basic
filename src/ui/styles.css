@@ -256,6 +256,12 @@ input.is-invalid {
   opacity: 0.55;
 }
 
+.column {
+  fill: #1f2229;
+  stroke: #1f2229;
+  stroke-width: 0;
+}
+
 .wall-hit {
   stroke: transparent;
   cursor: move;

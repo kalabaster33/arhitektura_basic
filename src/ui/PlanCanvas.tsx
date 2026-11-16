@@ -962,6 +962,17 @@ export function PlanCanvas(props: Props) {
             pointerEvents="none"
           />
         ))}
+        {(storey.columns ?? []).map((c) => (
+          <rect
+            key={c.id}
+            x={c.at.x - c.w / 2}
+            y={c.at.y - c.d / 2}
+            width={c.w}
+            height={c.d}
+            className="column"
+            pointerEvents="none"
+          />
+        ))}
         {/* Wider invisible lines so thin walls are easy to grab. */}
         {interactive &&
           storey.walls.filter((w) => !locked(w)).map((w) => (
