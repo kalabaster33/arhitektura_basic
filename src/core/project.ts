@@ -2,6 +2,7 @@
 import type { Pt } from "./geometry.ts";
 import { newId } from "./ids.ts";
 import {
+  type Balcony,
   type Building,
   type Column,
   type Project,
@@ -212,7 +213,23 @@ function cleanStructure(raw: any): Structure {
       )
       .map((c: any) => ({ id: c.id, kind: c.kind, a: { x: c.a.x, y: c.a.y }, b: { x: c.b.x, y: c.b.y } })),
     ...cleanColumns(raw?.columns),
+    ...cleanBalconies(raw?.balconies),
   };
+}
+
+/** Balconies and loggias read from a file, damaged ones left out; nothing when there are none. */
+function cleanBalconies(raw: unknown): { balconies?: Balcony[] } {
+  const num = (v: unknown) => typeof v === "number" && Number.isFinite(v);
+  const balconies = (Array.isArray(raw) ? raw : [])
+    .filter(
+      (b: any) =>
+        typeof b?.id === "string" &&
+        (b.kind === "balcony" || b.kind === "loggia") &&
+        Number.isInteger(b.edge) &&
+        [b.offset, b.width, b.depth, b.railing].every(num),
+    )
+    .map((b: any) => ({ id: b.id, kind: b.kind, edge: b.edge, offset: b.offset, width: b.width, depth: b.depth, railing: b.railing }));
+  return balconies.length ? { balconies } : {};
 }
 
 /** Columns read from a file, damaged ones left out; nothing when there are none. */

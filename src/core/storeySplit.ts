@@ -29,7 +29,7 @@ import { newId } from "./ids.ts";
 import type { Apartment, ApartmentProgram, Building, Storey, Wall } from "./model.ts";
 import { type OpeningSize, addOpening, locateOnWall, openingSides } from "./openings.ts";
 import { linkSpaces } from "./spaces.ts";
-import { coreRect, storeyOutline } from "./structure.ts";
+import { coreRect, nameBalconySpaces, storeyOutline } from "./structure.ts";
 
 // ------------------------------------------------------------------ inputs
 
@@ -1284,7 +1284,8 @@ export function proposeSplits(
         .join("|");
       if (seenPlans.has(plan)) continue;
       seenPlans.add(plan);
-      proposals.push(proposal);
+      // Each balcony and loggia goes with the apartment behind it.
+      proposals.push({ ...proposal, storey: nameBalconySpaces(building.structure, proposal.storey) });
       drawn++;
     }
     if (drawn === 0 && mode === "hall") hallFailed = true;

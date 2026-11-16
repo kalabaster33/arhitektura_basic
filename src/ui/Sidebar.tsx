@@ -468,11 +468,11 @@ export function PropertiesPanel(props: {
     if (wall?.part) {
       return (
         <section className="panel">
-          <h2>{wall.part === "shell" ? "Outside wall" : "Core wall"}</h2>
+          <h2>{{ shell: "Outside wall", core: "Core wall", balcony: "Railing" }[wall.part]}</h2>
           <p className="hint">
             This wall belongs to the structure of the building. Change it in the{" "}
-            {wall.part === "shell" ? "Building outline" : "Entrance and core"} step; it is then redrawn
-            on every storey.
+            {{ shell: "Building outline", core: "Entrance and core", balcony: "Erker and floors" }[wall.part]} step;
+            it is then redrawn on every storey.
           </p>
         </section>
       );

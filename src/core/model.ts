@@ -21,10 +21,11 @@ export interface Wall {
   kind: WallKind;
   /**
    * Set on walls generated from the building structure: the outside walls
-   * ("shell") and the walls of the hall, stairs and elevator ("core"). They
-   * are rebuilt from the structure, not edited by hand.
+   * ("shell"), the walls of the hall, stairs and elevator ("core") and the
+   * railings of balconies and loggias ("balcony"). They are rebuilt from the
+   * structure, not edited by hand.
    */
-  part?: "shell" | "core";
+  part?: "shell" | "core" | "balcony";
   /**
    * A wall drawn by hand that carries the building. No door or window may be
    * put in it, and the generators leave it alone. The outside and core walls
@@ -136,6 +137,29 @@ export interface Column {
   d: number;
 }
 
+export type BalconyKind = "balcony" | "loggia";
+
+/**
+ * A balcony (a slab standing out from the facade, behind a railing) or a
+ * loggia (cut back into the building, open behind a railing in the facade
+ * line). Placed on one side of the outline, on every storey above the ground
+ * floor, at the facade of that storey (beyond the erker where there is one).
+ */
+export interface Balcony {
+  id: string;
+  kind: BalconyKind;
+  /** The side of the ground floor outline it is on: edge i runs from corner i to corner i + 1. */
+  edge: number;
+  /** Distance along that side from corner i to where it begins. */
+  offset: number;
+  /** Length along the facade. */
+  width: number;
+  /** How far it stands out (balcony) or reaches in (loggia), from the outside face of the facade. */
+  depth: number;
+  /** Thickness of its railing. */
+  railing: number;
+}
+
 export interface Storey {
   id: string;
   name: string;
@@ -194,6 +218,8 @@ export interface Structure {
   core: CoreElement[];
   /** Columns, the same on every storey. Absent or empty when there are none. */
   columns?: Column[];
+  /** Balconies and loggias of the storeys above the ground floor. Absent when there are none. */
+  balconies?: Balcony[];
 }
 
 export interface Building {

@@ -1,12 +1,26 @@
 import { useState } from "react";
 import { type AreaConfig, formatArea } from "../core/areas.ts";
+import { type BalconyConfig, type BalconyIssue, balconyLabel } from "../core/balconies.ts";
 import type { BearingResult } from "../core/bearing.ts";
 import { type ColumnConfig, proposeColumns } from "../core/columns.ts";
 import { formatLatLon } from "../core/geo.ts";
-import { type CoreElement, type CoreKind, type Project, type Stage, type Storey, STAGES } from "../core/model.ts";
+import {
+  type Balcony,
+  type BalconyKind,
+  type CoreElement,
+  type CoreKind,
+  type Project,
+  type Stage,
+  type Storey,
+  STAGES,
+} from "../core/model.ts";
 import {
   type StructureStatus,
+  addBalcony,
   clearFootprint,
+  facadeLine,
+  removeBalcony,
+  updateBalcony,
   coreRect,
   removeCoreElement,
   ringArea,
@@ -201,6 +215,8 @@ export function ErkerPanel(props: {
   project: Project;
   buildingId: string;
   config: AreaConfig;
+  balconyConfig: BalconyConfig;
+  balconyIssues: BalconyIssue[];
   onChange: (project: Project) => void;
 }) {
   const { project, buildingId } = props;
@@ -267,7 +283,129 @@ export function ErkerPanel(props: {
         How far and on which sides a building may project comes from the planning conditions of the
         plot — to be verified by a licensed engineer.
       </p>
+      <BalconyList
+        project={project}
+        buildingId={buildingId}
+        config={props.balconyConfig}
+        issues={props.balconyIssues}
+        onChange={props.onChange}
+      />
     </section>
+  );
+}
+
+/** Balconies and loggias, part of the erker step: placed on a side, on every storey above the ground floor. */
+function BalconyList(props: {
+  project: Project;
+  buildingId: string;
+  config: BalconyConfig;
+  issues: BalconyIssue[];
+  onChange: (project: Project) => void;
+}) {
+  const { project, buildingId, config } = props;
+  const { structure } = project.site.buildings.find((b) => b.id === buildingId)!;
+  const list = structure.balconies ?? [];
+  const sides = structure.footprint.length;
+  const [problem, setProblem] = useState<{ id: string | null; text: string } | null>(null);
+
+  const add = (kind: BalconyKind) => {
+    let reason = "Draw the building outline first.";
+    // The first side it fits on, centred.
+    for (let edge = 0; edge < sides; edge++) {
+      const line = facadeLine(structure, edge);
+      if (!line) continue;
+      const width = Math.min(config.width, line.length);
+      const r = addBalcony(project, buildingId, {
+        kind,
+        edge,
+        offset: Math.round(((line.length - width) / 2) * 100) / 100,
+        width,
+        depth: config.depth,
+        railing: config.railing,
+      });
+      if (r.id) {
+        setProblem(null);
+        props.onChange(r.project);
+        return;
+      }
+      reason = r.problem ?? reason;
+    }
+    setProblem({ id: null, text: `No side has room for it: ${reason}` });
+  };
+  const update = (id: string, patch: Partial<Omit<Balcony, "id">>) => {
+    const r = updateBalcony(project, buildingId, id, patch);
+    if (r.problem) setProblem({ id, text: r.problem });
+    else {
+      setProblem(null);
+      props.onChange(r.project);
+    }
+  };
+
+  return (
+    <>
+      <h3>Balconies and loggias</h3>
+      {list.length > 0 && (
+        <ul className="core-list">
+          {list.map((b) => {
+            const issue = props.issues.find((i) => i.balconyId === b.id);
+            return (
+              <li key={b.id}>
+                <div className="core-list__head">
+                  <strong>{balconyLabel(list, b)}</strong>
+                  <button onClick={() => props.onChange(removeBalcony(project, buildingId, b.id))} title="Remove it from every storey">
+                    Remove
+                  </button>
+                </div>
+                <div className="field-grid">
+                  <label className="field">
+                    <span>Kind</span>
+                    <select value={b.kind} onChange={(e) => update(b.id, { kind: e.target.value as BalconyKind })}>
+                      <option value="balcony">balcony (stands out)</option>
+                      <option value="loggia">loggia (cut in)</option>
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Side</span>
+                    <select value={b.edge} onChange={(e) => update(b.id, { edge: Number(e.target.value) })}>
+                      {structure.footprint.map((_, i) => (
+                        <option key={i} value={i}>
+                          Side {i + 1}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <LengthField label="From the corner" value={b.offset} min={0} onCommit={(v) => update(b.id, { offset: v })} />
+                  <LengthField label="Width" value={b.width} min={0.5} onCommit={(v) => update(b.id, { width: v })} />
+                  <LengthField
+                    label={b.kind === "balcony" ? "Depth (out)" : "Depth (in)"}
+                    value={b.depth}
+                    min={0.2}
+                    onCommit={(v) => update(b.id, { depth: v })}
+                  />
+                  <LengthField label="Railing" value={b.railing} min={0.01} onCommit={(v) => update(b.id, { railing: v })} />
+                </div>
+                {problem?.id === b.id && <p className="hint is-bad">{problem.text}</p>}
+                {issue && <p className="hint is-bad">{issue.message}</p>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <div className="button-row">
+        <button disabled={sides < 3} onClick={() => add("balcony")}>
+          Add balcony
+        </button>
+        <button disabled={sides < 3} onClick={() => add("loggia")}>
+          Add loggia
+        </button>
+      </div>
+      {problem?.id === null && <p className="hint is-bad">{problem.text}</p>}
+      <p className="hint">
+        On every storey above the ground floor, at the facade of that storey. &ldquo;From the corner&rdquo; is
+        measured along the side from its first corner. A balcony is checked against the setbacks of the
+        plot; a loggia lies inside the building. Each one joins the apartment behind it.
+      </p>
+    </>
   );
 }
 

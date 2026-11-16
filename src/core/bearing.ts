@@ -8,7 +8,7 @@
  * column of width w (along x) and depth d (along y) with d w^3 / 12 along x
  * and w d^3 / 12 along y. Doors and windows cut a wall into separate pieces.
  * The outside walls, the core walls, the walls marked load-bearing and the
- * columns carry; partitions do not. The mass is spread evenly over the floor.
+ * columns carry; partitions and railings do not. The mass is spread evenly over the floor.
  *
  * The test is the regularity criterion of Eurocode 8 (EN 1998-1, 4.2.3.2 (6)):
  * in each direction the eccentricity is at most 0.30 times the torsional
@@ -35,7 +35,7 @@ export function parseBearingConfig(raw: unknown): BearingConfig {
 }
 
 /** True for a wall that carries the building. */
-export const carries = (w: Wall): boolean => w.part !== undefined || w.loadBearing === true;
+export const carries = (w: Wall): boolean => w.part === "shell" || w.part === "core" || w.loadBearing === true;
 
 /** One carrying element: where it is and how stiff it is against a push along x and along y. */
 interface Element {

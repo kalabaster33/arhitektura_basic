@@ -10,9 +10,20 @@
  */
 import { sortedStoreys } from "./building.ts";
 import { applyWalls } from "./edit.ts";
-import { type Pt, offsetRingLeft, pointInPolygon, pointInRing, ringSignedArea, samePoint } from "./geometry.ts";
+import {
+  type Pt,
+  dist,
+  distToSegment,
+  offsetRingLeft,
+  pointInPolygon,
+  pointInRing,
+  projectParam,
+  ringSignedArea,
+  samePoint,
+} from "./geometry.ts";
 import { newId } from "./ids.ts";
 import {
+  type Balcony,
   type Building,
   type Column,
   type CoreElement,
@@ -58,6 +69,155 @@ export function upperOutline(structure: Structure): Pt[] {
   return offsetRingLeft(reversed, d).reverse().map(roundPt);
 }
 
+// ------------------------------------------------------- balconies and loggias
+
+/** A balcony narrower than this is a slip of the hand. */
+export const MIN_BALCONY_WIDTH = 0.5;
+
+/**
+ * Side `edge` of the outline as it is on the storeys above the ground floor:
+ * where the facade line starts (beyond the erker, where that side has one),
+ * the unit direction along it, the unit normal pointing outdoors, and the
+ * length of the side on the ground floor.
+ */
+export function facadeLine(structure: Structure, edge: number): { a: Pt; u: Pt; out: Pt; length: number } | null {
+  const fp = structure.footprint;
+  const n = fp.length;
+  if (n < 3 || !(edge >= 0 && edge < n)) return null;
+  const a = fp[edge];
+  const b = fp[(edge + 1) % n];
+  const length = dist(a, b);
+  if (length < 1e-9) return null;
+  const u = { x: (b.x - a.x) / length, y: (b.y - a.y) / length };
+  // The footprint has its interior on the left, so outdoors is on the right.
+  const out = { x: u.y, y: -u.x };
+  const d = structure.erker.depth > 0 && structure.erker.edges[edge] ? structure.erker.depth : 0;
+  return { a: { x: a.x + out.x * d, y: a.y + out.y * d }, u, out, length };
+}
+
+/** A point `along` a facade line and `outward` from it (negative: into the building). */
+function facadePoint(line: { a: Pt; u: Pt; out: Pt }, along: number, outward: number): Pt {
+  return roundPt({
+    x: line.a.x + line.u.x * along + line.out.x * outward,
+    y: line.a.y + line.u.y * along + line.out.y * outward,
+  });
+}
+
+/**
+ * The outline of a balcony to its outer faces (standing out from the facade),
+ * or of a loggia (reaching into the building from the facade line). Interior
+ * on the left. Empty when its side does not exist.
+ */
+export function balconyOutline(structure: Structure, b: Balcony): Pt[] {
+  const line = facadeLine(structure, b.edge);
+  if (!line) return [];
+  const h = b.kind === "balcony" ? b.depth : -b.depth;
+  return leftHanded([
+    facadePoint(line, b.offset, 0),
+    facadePoint(line, b.offset + b.width, 0),
+    facadePoint(line, b.offset + b.width, h),
+    facadePoint(line, b.offset, h),
+  ]);
+}
+
+/** The edge of a ring both points lie on, or -1. */
+function ringEdgeHolding(ring: Pt[], p: Pt, q: Pt): number {
+  return ring.findIndex((r, k) => {
+    const s = ring[(k + 1) % ring.length];
+    return distToSegment(p, r, s) <= 1e-6 && distToSegment(q, r, s) <= 1e-6;
+  });
+}
+
+/** Why a balcony or loggia cannot be placed like this, or null when it can. */
+export function balconyProblem(structure: Structure, b: Balcony, others: Balcony[]): string | null {
+  const line = facadeLine(structure, b.edge);
+  if (!line) return "That side of the outline does not exist.";
+  if (![b.offset, b.width, b.depth, b.railing].every(Number.isFinite)) return "A size is not a number.";
+  if (b.width < MIN_BALCONY_WIDTH) return `It must be at least ${MIN_BALCONY_WIDTH.toFixed(2)} m wide.`;
+  if (!(b.railing > 0)) return "The railing needs a thickness.";
+  if (!(b.depth > b.railing + 0.1)) return "It is too shallow for its railing.";
+  if (b.offset < -1e-6 || b.offset + b.width > line.length + 1e-6) {
+    return `It runs past the end of side ${b.edge + 1} (${line.length.toFixed(2)} m long).`;
+  }
+  for (const o of others) {
+    if (o.id === b.id || o.edge !== b.edge) continue;
+    if (b.offset < o.offset + o.width - 1e-6 && o.offset < b.offset + b.width - 1e-6) {
+      return `It overlaps another ${o.kind} on side ${b.edge + 1}.`;
+    }
+  }
+  if (b.kind === "loggia") {
+    // The mouth must lie on one straight stretch of the upper facade, and the
+    // loggia must stay inside the building, clear of the core.
+    const upper = upperOutline(structure);
+    const p0 = facadePoint(line, b.offset, 0);
+    const p1 = facadePoint(line, b.offset + b.width, 0);
+    if (ringEdgeHolding(upper, p0, p1) < 0) return "A loggia must sit on one straight stretch of the facade.";
+    const wall = structure.wallThickness;
+    const back = [
+      facadePoint(line, b.offset + 0.01, -b.depth - wall),
+      facadePoint(line, b.offset + b.width - 0.01, -b.depth - wall),
+    ];
+    if (!back.every((p) => pointInRing(p, upper))) return "It reaches out of the other side of the building.";
+    const ring = balconyOutline(structure, b);
+    const xs = ring.map((p) => p.x);
+    const ys = ring.map((p) => p.y);
+    const gap = structure.coreWallThickness / 2 + wall;
+    for (const c of structure.core) {
+      const { min, max } = coreRect(c);
+      const apart =
+        Math.max(...xs) <= min.x - gap ||
+        Math.min(...xs) >= max.x + gap ||
+        Math.max(...ys) <= min.y - gap ||
+        Math.min(...ys) >= max.y + gap;
+      if (!apart) return "It runs into the hall, stairs or elevator.";
+    }
+  }
+  return null;
+}
+
+/** The balconies and loggias that can be drawn; any others are left out. */
+export function placeableBalconies(structure: Structure): Balcony[] {
+  const all = structure.balconies ?? [];
+  return all.filter((b) => balconyProblem(structure, b, all) === null);
+}
+
+/**
+ * Outline of the storeys above the ground floor at the outside wall faces,
+ * with the loggias cut into it. `origin[i]` is the edge of the plain upper
+ * outline that edge i of this one lies on.
+ */
+function facadeOutline(structure: Structure): { ring: Pt[]; origin: number[] } {
+  const upper = upperOutline(structure);
+  const notches = new Map<number, { t: number; pts: Pt[] }[]>();
+  for (const b of placeableBalconies(structure)) {
+    if (b.kind !== "loggia") continue;
+    const line = facadeLine(structure, b.edge)!;
+    const p0 = facadePoint(line, b.offset, 0);
+    const p1 = facadePoint(line, b.offset + b.width, 0);
+    const k = ringEdgeHolding(upper, p0, p1);
+    if (k < 0) continue;
+    const list = notches.get(k) ?? [];
+    list.push({
+      t: projectParam(p0, upper[k], upper[(k + 1) % upper.length]),
+      pts: [p0, facadePoint(line, b.offset, -b.depth), facadePoint(line, b.offset + b.width, -b.depth), p1],
+    });
+    notches.set(k, list);
+  }
+  const ring: Pt[] = [];
+  const origin: number[] = [];
+  upper.forEach((p, k) => {
+    ring.push(p);
+    origin.push(k);
+    for (const notch of (notches.get(k) ?? []).sort((x, y) => x.t - y.t)) {
+      for (const q of notch.pts) {
+        ring.push(q);
+        origin.push(k);
+      }
+    }
+  });
+  return { ring, origin };
+}
+
 /** True for the lowest storey of the building. */
 export function isGroundStorey(building: Building, storeyId: string): boolean {
   return sortedStoreys(building)[0]?.id === storeyId;
@@ -67,7 +227,7 @@ export function isGroundStorey(building: Building, storeyId: string): boolean {
 export function storeyOutline(building: Building, storeyId: string): Pt[] {
   const { structure } = building;
   if (structure.footprint.length < 3) return [];
-  return isGroundStorey(building, storeyId) ? structure.footprint : upperOutline(structure);
+  return isGroundStorey(building, storeyId) ? structure.footprint : facadeOutline(structure).ring;
 }
 
 export function ringArea(ring: Pt[]): number {
@@ -101,19 +261,28 @@ export function coreRect(c: Pick<CoreElement, "a" | "b">): { min: Pt; max: Pt } 
 
 function generatedWalls(building: Building, storey: Storey): Wall[] {
   const { structure } = building;
-  const outline = storeyOutline(building, storey.id);
-  if (outline.length < 3) return [];
+  if (structure.footprint.length < 3) return [];
+  const ground = isGroundStorey(building, storey.id);
+  const { ring: outline, origin } = ground
+    ? { ring: structure.footprint, origin: structure.footprint.map((_, i) => i) }
+    : facadeOutline(structure);
   const walls: Wall[] = [];
   // The outline is the outside face; the walls are drawn on their centrelines.
   const centre = offsetRingLeft(
     outline,
     outline.map(() => structure.wallThickness / 2),
   ).map(roundPt);
+  // Ids follow the side of the plain outline, so a loggia cut into one side
+  // leaves the walls of the other sides, and the windows in them, alone.
+  const pieces = new Map<number, number>();
   centre.forEach((a, i) => {
     const b = centre[(i + 1) % centre.length];
     if (samePoint(a, b)) return;
+    const side = centre.length === outline.length ? origin[i] : i;
+    const piece = pieces.get(side) ?? 0;
+    pieces.set(side, piece + 1);
     walls.push({
-      id: `${storey.id}:shell:${i}`,
+      id: piece === 0 ? `${storey.id}:shell:${side}` : `${storey.id}:shell:${side}:${piece}`,
       a,
       b,
       thickness: structure.wallThickness,
@@ -121,6 +290,7 @@ function generatedWalls(building: Building, storey: Storey): Wall[] {
       part: "shell",
     });
   });
+  if (!ground) walls.push(...railingWalls(structure, storey));
   for (const c of structure.core) {
     const { min, max } = coreRect(c);
     const corners = [min, { x: max.x, y: min.y }, max, { x: min.x, y: max.y }];
@@ -136,6 +306,83 @@ function generatedWalls(building: Building, storey: Storey): Wall[] {
     });
   }
   return walls;
+}
+
+/**
+ * The railings of the balconies and loggias of a storey above the ground
+ * floor. A balcony's railing runs round its three open sides and meets the
+ * outside wall; a loggia's runs across its mouth, in line with the outside wall.
+ */
+function railingWalls(structure: Structure, storey: Storey): Wall[] {
+  const walls: Wall[] = [];
+  const half = structure.wallThickness / 2;
+  for (const b of placeableBalconies(structure)) {
+    const line = facadeLine(structure, b.edge)!;
+    const t = b.railing;
+    const runs: [Pt, Pt][] = [];
+    if (b.kind === "balcony") {
+      const s0 = b.offset + t / 2;
+      const s1 = b.offset + b.width - t / 2;
+      const front = b.depth - t / 2;
+      runs.push(
+        [facadePoint(line, s0, -half), facadePoint(line, s0, front)],
+        [facadePoint(line, s0, front), facadePoint(line, s1, front)],
+        [facadePoint(line, s1, front), facadePoint(line, s1, -half)],
+      );
+    } else {
+      runs.push([facadePoint(line, b.offset - half, -half), facadePoint(line, b.offset + b.width + half, -half)]);
+    }
+    runs.forEach(([a, c], k) =>
+      walls.push({ id: `${storey.id}:balcony:${b.id}:${k}`, a, b: c, thickness: t, kind: "interior", part: "balcony" }),
+    );
+  }
+  return walls;
+}
+
+/**
+ * Gives the rooms the balconies and loggias enclose their type and name where
+ * they are still plain rooms, and hands each to the apartment of the room
+ * behind it when it belongs to none.
+ */
+export function nameBalconySpaces(structure: Structure, storey: Storey): Storey {
+  const list = placeableBalconies(structure);
+  if (list.length === 0) return storey;
+  const { faceBySpaceId } = linkSpaces(storey);
+  const spaceAt = (p: Pt) =>
+    storey.spaces.find((s) => {
+      const face = faceBySpaceId.get(s.id);
+      return face !== undefined && pointInPolygon(p, face.outer, face.holes);
+    });
+  const taken = new Set(storey.spaces.map((s) => s.name));
+  const patch = new Map<string, { type: SpaceType; name: string }>();
+  const joins = new Map<string, string>();
+  for (const b of list) {
+    const line = facadeLine(structure, b.edge)!;
+    const mid = b.offset + b.width / 2;
+    const inside = facadePoint(line, mid, b.kind === "balcony" ? b.depth / 2 : -b.depth / 2);
+    const behind = facadePoint(line, mid, (b.kind === "balcony" ? 0 : -b.depth) - structure.wallThickness - 0.3);
+    const space = spaceAt(inside);
+    if (!space) continue;
+    if (space.type === "room" && !patch.has(space.id)) {
+      const base = b.kind === "balcony" ? "Balcony" : "Loggia";
+      let name = base;
+      for (let n = 2; taken.has(name); n++) name = `${base} ${n}`;
+      taken.add(name);
+      patch.set(space.id, { type: "balcony", name });
+    }
+    const owner = spaceAt(behind);
+    const apartment = owner && storey.apartments.find((a) => a.spaceIds.includes(owner.id));
+    if (apartment && !storey.apartments.some((a) => a.spaceIds.includes(space.id))) joins.set(space.id, apartment.id);
+  }
+  if (patch.size === 0 && joins.size === 0) return storey;
+  return {
+    ...storey,
+    spaces: storey.spaces.map((s) => (patch.has(s.id) ? { ...s, ...patch.get(s.id)! } : s)),
+    apartments: storey.apartments.map((a) => {
+      const extra = [...joins].filter(([, apt]) => apt === a.id).map(([id]) => id);
+      return extra.length ? { ...a, spaceIds: [...a.spaceIds, ...extra] } : a;
+    }),
+  };
 }
 
 /** Names the rooms the core rectangles enclose, where they are still unnamed. */
@@ -204,7 +451,8 @@ export function rebuildStructure(project: Project, buildingId: string): Project 
     const generated = generatedWalls(building, storey);
     const own = storey.walls.filter((w) => !w.part);
     if (generated.length === 0 && own.length === storey.walls.length) return storey;
-    return nameCoreSpaces(building.structure, applyWalls(storey, [...generated, ...own]));
+    const walled = nameCoreSpaces(building.structure, applyWalls(storey, [...generated, ...own]));
+    return isGroundStorey(building, storey.id) ? walled : nameBalconySpaces(building.structure, walled);
   });
   return withBuilding(project, { ...building, storeys });
 }
@@ -231,9 +479,11 @@ export function setFootprint(project: Project, buildingId: string, corners: Pt[]
   const structure = structureOf(project, buildingId);
   const footprint = leftHanded(corners.map(roundPt));
   if (!structure || boundaryProblem(footprint)) return project;
+  // The sides are new, so balconies placed on the old ones go.
   return withStructure(project, buildingId, {
     footprint,
     erker: { depth: structure.erker.depth, edges: footprint.map(() => true) },
+    balconies: undefined,
   });
 }
 
@@ -254,6 +504,7 @@ export function clearFootprint(project: Project, buildingId: string): Project {
   return withStructure(project, buildingId, {
     footprint: [],
     erker: { depth: structure.erker.depth, edges: [] },
+    balconies: undefined,
   });
 }
 
@@ -365,6 +616,49 @@ export function removeColumn(project: Project, buildingId: string, id: string): 
   if (!structure?.columns?.some((c) => c.id === id)) return project;
   const rest = structure.columns.filter((c) => c.id !== id);
   return withStructure(project, buildingId, { columns: rest.length ? rest : undefined });
+}
+
+/** Adds a balcony or loggia to every storey above the ground floor; with the reason when it does not fit. */
+export function addBalcony(
+  project: Project,
+  buildingId: string,
+  spec: Omit<Balcony, "id">,
+): { project: Project; id: string | null; problem: string | null } {
+  const structure = structureOf(project, buildingId);
+  if (!structure) return { project, id: null, problem: "No such building." };
+  const b: Balcony = { ...spec, id: newId("balcony") };
+  const list = structure.balconies ?? [];
+  const problem = balconyProblem(structure, b, list);
+  if (problem) return { project, id: null, problem };
+  return { project: withStructure(project, buildingId, { balconies: [...list, b] }), id: b.id, problem: null };
+}
+
+/** Changes a balcony or loggia; unchanged, with the reason, when the change does not fit. */
+export function updateBalcony(
+  project: Project,
+  buildingId: string,
+  id: string,
+  patch: Partial<Omit<Balcony, "id">>,
+): { project: Project; problem: string | null } {
+  const structure = structureOf(project, buildingId);
+  const list = structure?.balconies ?? [];
+  const old = list.find((b) => b.id === id);
+  if (!structure || !old) return { project, problem: "No such balcony." };
+  const next = { ...old, ...patch };
+  const problem = balconyProblem(structure, next, list);
+  if (problem) return { project, problem };
+  return {
+    project: withStructure(project, buildingId, { balconies: list.map((b) => (b.id === id ? next : b)) }),
+    problem: null,
+  };
+}
+
+export function removeBalcony(project: Project, buildingId: string, id: string): Project {
+  const structure = structureOf(project, buildingId);
+  const list = structure?.balconies ?? [];
+  if (!list.some((b) => b.id === id)) return project;
+  const rest = list.filter((b) => b.id !== id);
+  return withStructure(project, buildingId, { balconies: rest.length ? rest : undefined });
 }
 
 /** Places an entrance door in a wall; unchanged if it does not fit there. */

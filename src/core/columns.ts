@@ -120,7 +120,8 @@ export function proposeColumns(building: Building, storey: Storey, config: Colum
     kind: "exterior",
     part: "shell",
   }));
-  const lines = [...storey.walls, ...pseudo].filter((w) => dist(w.a, w.b) > NODE_TOL);
+  // Railings carry nothing; the rest of the walls are sorted out below.
+  const lines = [...storey.walls.filter((w) => w.part !== "balcony"), ...pseudo].filter((w) => dist(w.a, w.b) > NODE_TOL);
   const real = new Set(storey.walls.map((w) => w.id));
 
   const runs: Run[] = [];

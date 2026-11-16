@@ -298,7 +298,7 @@ export function buildingFootprint(site: Pick<Site, "buildings">, mode: Footprint
 // ---------------------------------------------------------- figures and checks
 
 export interface SiteIssue {
-  kind: "outsidePlot" | "insideSetback" | "coverage" | "floorAreaRatio";
+  kind: "outsidePlot" | "insideSetback" | "coverage" | "floorAreaRatio" | "balconySetback";
   message: string;
 }
 

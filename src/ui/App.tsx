@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import annotationStyleJson from "../config/annotationStyle.json";
 import areaDefinitions from "../config/areaDefinitions.json";
 import dimensionStyleJson from "../config/dimensionStyle.json";
+import balconiesJson from "../config/balconies.json";
 import bearingJson from "../config/bearingCheck.json";
 import columnsJson from "../config/columns.json";
 import coreAlignment from "../config/coreAlignment.json";
@@ -41,6 +42,7 @@ import {
   sortedStoreys,
   updateStoreyInfo,
 } from "../core/building.ts";
+import { balconySiteIssues, parseBalconyConfig } from "../core/balconies.ts";
 import { checkBearing, parseBearingConfig } from "../core/bearing.ts";
 import { parseColumnConfig } from "../core/columns.ts";
 import { checkCoreAlignment, coreOutlines, parseCoreConfig } from "../core/coreAlignment.ts";
@@ -64,6 +66,8 @@ import { linkSpaces } from "../core/spaces.ts";
 import {
   addCoreElement,
   isGroundStorey,
+  balconyOutline,
+  placeableBalconies,
   rebuildStructure,
   setFootprint,
   setStage,
@@ -110,6 +114,7 @@ const areaConfig = parseAreaConfig(areaDefinitions);
 const coreConfig = parseCoreConfig(coreAlignment);
 const columnConfig = parseColumnConfig(columnsJson);
 const bearingConfig = parseBearingConfig(bearingJson);
+const balconyConfig = parseBalconyConfig(balconiesJson);
 const roomCheckConfig = parseRoomCheckConfig(roomChecks);
 const defaultRulesDoc = rulesDoc(layoutRules);
 const siteRules = parseSiteRules(siteRulesJson);
@@ -320,7 +325,16 @@ export function App() {
   }, [storey.apartments]);
 
   // The site is checked against the real project: a previewed layout only adds partitions.
-  const siteAnalysis = useMemo(() => analyseSite(project.site, siteRules, areaConfig), [project.site]);
+  const balconyIssues = useMemo(
+    () => project.site.buildings.flatMap((b) => balconySiteIssues(project.site, b, balconyConfig)),
+    [project.site],
+  );
+  const siteAnalysis = useMemo(() => {
+    const analysis = analyseSite(project.site, siteRules, areaConfig);
+    if (balconyIssues.length === 0) return analysis;
+    const extra = balconyIssues.map((i) => ({ kind: "balconySetback" as const, message: i.message }));
+    return { ...analysis, issues: [...analysis.issues, ...extra] };
+  }, [project.site, balconyIssues]);
   const hasPlot = project.site.boundary.length >= 3;
   const setProject = (next: Project, record = true) => {
     if (previewing || next === project) return;
@@ -938,6 +952,11 @@ export function App() {
                 ? { mass: bearing.centreOfMass, stiffness: bearing.centreOfStiffness, bad: bearing.problems.length > 0 }
                 : null
             }
+            balconyOutlines={
+              hasOutline && isGroundStorey(building, storey.id)
+                ? placeableBalconies(structure).map((b) => balconyOutline(structure, b))
+                : []
+            }
             erkerOutline={
               hasOutline && isGroundStorey(building, storey.id) && upperOutline(structure) !== structure.footprint
                 ? upperOutline(structure)
@@ -985,7 +1004,14 @@ export function App() {
             <OutlinePanel project={project} buildingId={building.id} config={areaConfig} onChange={(p) => setProject(p)} />
           )}
           {stage === "erker" && (
-            <ErkerPanel project={project} buildingId={building.id} config={areaConfig} onChange={(p) => setProject(p)} />
+            <ErkerPanel
+              project={project}
+              buildingId={building.id}
+              config={areaConfig}
+              balconyConfig={balconyConfig}
+              balconyIssues={balconyIssues}
+              onChange={(p) => setProject(p)}
+            />
           )}
           {stage === "core" && (
             <CorePanel project={project} buildingId={building.id} status={status} onChange={(p) => setProject(p)} />

@@ -82,6 +82,8 @@ function freeSpans(
 ): [number, number][] {
   // A load-bearing wall takes no openings at all.
   if (wall.loadBearing && !wall.part) return [];
+  // Nor does a railing.
+  if (wall.part === "balcony") return [];
   const length = dist(wall.a, wall.b);
   const blocked: [number, number][] = columnSpansOnWall(wall, columns);
   for (const other of walls) {

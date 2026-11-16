@@ -101,9 +101,11 @@ export function computeStoreyAreas(storey: Storey, config: AreaConfig): StoreyAr
     totals.net += net;
     totals.useful += useful;
   }
-  // With yards and their fences, the storey's outline is that of its outside walls.
+  // With yards and their fences, or balconies and their railings, the storey's
+  // outline is that of its outside walls.
   const shell = storey.walls.filter((w) => w.kind === "exterior");
-  const outlines = outdoor && shell.length > 0 ? buildTopology(shell).outlines : topology.outlines;
+  const open = outdoor || storey.walls.some((w) => w.part === "balcony");
+  const outlines = open && shell.length > 0 ? buildTopology(shell).outlines : topology.outlines;
   for (const outline of outlines) {
     totals.gross +=
       config.gross.storey === "wallOuterFace" ? outline.outerFaceArea : outline.centrelineArea;

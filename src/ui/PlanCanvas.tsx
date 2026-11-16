@@ -143,6 +143,8 @@ interface Props {
   outline: Pt[];
   /** Outline of the storeys above, shown on the ground floor where they project; null when they do not. */
   erkerOutline: Pt[] | null;
+  /** Balconies and loggias of the storeys above, drawn dashed on the ground floor. */
+  balconyOutlines?: Pt[][];
   /** Centre of mass and centre of stiffness of the storey, marked on the plan; null to hide them. */
   bearingCentres?: { mass: Pt; stiffness: Pt | null; bad: boolean } | null;
   /** The map shown under the plan, with the plan's origin on the earth; null for no map. */
@@ -1114,6 +1116,19 @@ export function PlanCanvas(props: Props) {
             </g>
           );
         })}
+
+        {(props.balconyOutlines ?? []).map((ring, i) => (
+          <path
+            key={`balcony-${i}`}
+            d={ringPath(ring)}
+            className="erker-outline"
+            strokeWidth={1.25 * px}
+            strokeDasharray={`${4 * px} ${3 * px}`}
+            pointerEvents="none"
+          >
+            <title>Balcony or loggia of the storeys above</title>
+          </path>
+        ))}
 
         {props.erkerOutline && (
           <path
