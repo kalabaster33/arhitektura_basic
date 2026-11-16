@@ -6,7 +6,7 @@ import splitJson from "../config/storeySplit.json";
 import { apartmentInteriorWalls, parseLayoutRules, proposeLayouts } from "./autoLayout.ts";
 import { parseAreaConfig } from "./areas.ts";
 import { addStorey, sortedStoreys } from "./building.ts";
-import { parseColumnConfig, proposeColumns } from "./columns.ts";
+import { axisLetter, parseColumnConfig, proposeColumns } from "./columns.ts";
 import { columnRegion, storeyDrawing } from "./drawing.ts";
 import { pointInRing } from "./geometry.ts";
 import type { Project, Storey } from "./model.ts";
@@ -67,54 +67,91 @@ function plannedBlock(erker = 0): { project: Project; storey: Storey } {
   return { project, storey };
 }
 
-const near = (cols: { at: { x: number; y: number } }[], x: number, y: number, tol = 0.3) =>
-  cols.some((c) => Math.abs(c.at.x - x) <= tol && Math.abs(c.at.y - y) <= tol);
+/** Checks that the columns form the full grid: a column at every crossing that lies in the building. */
+function expectFullGrid(
+  proposal: ReturnType<typeof proposeColumns>,
+  footprint: { x: number; y: number }[],
+  skip: (x: number, y: number) => boolean = () => false,
+) {
+  const { grid, columns } = proposal;
+  for (const c of columns) {
+    expect(grid.xs).toContain(c.at.x);
+    expect(grid.ys).toContain(c.at.y);
+  }
+  for (const x of grid.xs) {
+    for (const y of grid.ys) {
+      const inside = [[-1, -1], [1, -1], [1, 1], [-1, 1]].every(([sx, sy]) =>
+        pointInRing({ x: x + sx * (config.width / 2 - 1e-4), y: y + sy * (config.depth / 2 - 1e-4) }, footprint),
+      );
+      const has = columns.some((c) => c.at.x === x && c.at.y === y);
+      expect(has).toBe(inside && !skip(x, y));
+    }
+  }
+}
+
+const spansOf = (axes: number[]) => axes.slice(1).map((v, i) => v - axes[i]);
 
 describe("column config", () => {
   it("reads the config and rejects damaged values", () => {
-    expect(config.maxSpan).toBeGreaterThan(0);
+    expect(config.maxSpan).toBeGreaterThan(config.minSpan);
     expect(() => parseColumnConfig({ ...columnsJson, width: 0 })).toThrow(/width/);
     expect(() => parseColumnConfig({ ...columnsJson, maxSpan: "6" })).toThrow(/maxSpan/);
+    expect(() => parseColumnConfig({ ...columnsJson, minSpan: 9 })).toThrow(/minSpan/);
+  });
+
+  it("names the axes", () => {
+    expect([0, 1, 25, 26, 27].map(axisLetter)).toEqual(["A", "B", "Z", "AA", "AB"]);
   });
 });
 
 describe("column grid", () => {
-  it("puts columns at the corners, the core and where apartment walls meet the facade", { timeout: 30000 }, () => {
+  it("puts a column at every crossing of the axes, flush with the outside face", { timeout: 30000 }, () => {
     const { project, storey } = plannedBlock();
     const building = project.site.buildings[0];
-    const cols = proposeColumns(building, storey, config);
-    // Outline corners, just inside the outside face.
-    for (const [x, y] of [[0, 0], [20, 0], [20, 14], [0, 14]]) expect(near(cols, x, y)).toBe(true);
-    // Hall corners.
-    for (const [x, y] of [[8, 5], [12, 5]]) expect(near(cols, x, y)).toBe(true);
-    // Every wall between two apartments ends in a column at the facade.
-    const party = storey.walls.filter((w) => !w.part);
-    expect(party.length).toBeGreaterThan(0);
-    for (const w of party) {
-      const onFacade = [w.a, w.b].find((p) => p.x < 0.2 || p.x > 19.8 || p.y < 0.2 || p.y > 13.8);
-      if (onFacade) expect(near(cols, onFacade.x, onFacade.y)).toBe(true);
+    const proposal = proposeColumns(building, storey, config);
+    const { xs, ys } = proposal.grid;
+    // The outer axes are half a column in from the outside face.
+    expect(xs[0]).toBeCloseTo(0.15, 6);
+    expect(xs.at(-1)).toBeCloseTo(19.85, 6);
+    expect(ys[0]).toBeCloseTo(0.15, 6);
+    expect(ys.at(-1)).toBeCloseTo(13.85, 6);
+    // Every span between the shortest and the largest.
+    for (const span of [...spansOf(xs), ...spansOf(ys)]) {
+      expect(span).toBeGreaterThanOrEqual(config.minSpan - 1e-6);
+      expect(span).toBeLessThanOrEqual(config.maxSpan + 1e-6);
     }
-    // All of them stand inside the ground floor, none overlapping another.
-    for (const c of cols) {
-      for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
-        const corner = { x: c.at.x + sx * (c.w / 2 - 1e-4), y: c.at.y + sy * (c.d / 2 - 1e-4) };
-        expect(pointInRing(corner, building.structure.footprint)).toBe(true);
-      }
-    }
-    for (let i = 0; i < cols.length; i++) {
-      for (let j = i + 1; j < cols.length; j++) {
-        expect(Math.hypot(cols[i].at.x - cols[j].at.x, cols[i].at.y - cols[j].at.y)).toBeGreaterThanOrEqual(config.mergeDistance);
-      }
+    // The hall walls are axes.
+    expect(xs).toContain(8);
+    expect(xs.includes(11) || xs.includes(12)).toBe(true);
+    for (const y of [5, 9]) expect(ys).toContain(y);
+    // No column inside the stairs (8..11 x 9..13.875).
+    const inStairs = (x: number, y: number) => x > 8.1 && x < 10.9 && y > 9.1 && y < 13.775;
+    expectFullGrid(proposal, building.structure.footprint, inStairs);
+    // So from every column there is one along x and one along y within the largest span.
+    for (const c of proposal.columns) {
+      const sameRow = proposal.columns.filter((o) => o !== c && o.at.y === c.at.y).map((o) => Math.abs(o.at.x - c.at.x));
+      const sameCol = proposal.columns.filter((o) => o !== c && o.at.x === c.at.x).map((o) => Math.abs(o.at.y - c.at.y));
+      expect(Math.min(...sameRow)).toBeLessThanOrEqual(config.maxSpan + 1e-6);
+      expect(Math.min(...sameCol)).toBeLessThanOrEqual(config.maxSpan + 1e-6);
     }
   });
 
-  it("keeps the span along the facade within the largest span", { timeout: 30000 }, () => {
+  it("divides a long side evenly when the largest span is short", { timeout: 30000 }, () => {
     const { project, storey } = plannedBlock();
-    const cols = proposeColumns(project.site.buildings[0], storey, { ...config, maxSpan: 4 });
-    const south = cols.filter((c) => c.at.y < 0.5).map((c) => c.at.x).sort((a, b) => a - b);
-    expect(south[0]).toBeLessThan(0.5);
-    expect(south.at(-1)).toBeGreaterThan(19.5);
-    for (let i = 1; i < south.length; i++) expect(south[i] - south[i - 1]).toBeLessThanOrEqual(4 + 1e-6);
+    const { grid } = proposeColumns(project.site.buildings[0], storey, { ...config, maxSpan: 4, minSpan: 2 });
+    for (const span of [...spansOf(grid.xs), ...spansOf(grid.ys)]) expect(span).toBeLessThanOrEqual(4 + 1e-6);
+  });
+
+  it("follows the walls between the apartments where they keep the spans", { timeout: 30000 }, () => {
+    const { project, storey } = plannedBlock();
+    const { grid } = proposeColumns(project.site.buildings[0], storey, config);
+    const party = storey.walls.filter((w) => !w.part);
+    expect(party.length).toBeGreaterThan(0);
+    // Each wall between apartments is on an axis, or an axis is within the shortest span of it.
+    for (const w of party) {
+      if (w.a.x === w.b.x) expect(Math.min(...grid.xs.map((x) => Math.abs(x - w.a.x)))).toBeLessThan(config.minSpan);
+      if (w.a.y === w.b.y) expect(Math.min(...grid.ys.map((y) => Math.abs(y - w.a.y)))).toBeLessThan(config.minSpan);
+    }
   });
 
   it("does not put walls inside one apartment into the grid", { timeout: 30000 }, () => {
@@ -138,15 +175,50 @@ describe("column grid", () => {
   it("keeps every column on the ground with an erker above", { timeout: 30000 }, () => {
     const { project, storey } = plannedBlock(1.2);
     const building = project.site.buildings[0];
-    const cols = proposeColumns(building, storey, config);
-    expect(cols.length).toBeGreaterThan(4);
-    for (const c of cols) expect(pointInRing(c.at, building.structure.footprint)).toBe(true);
+    const proposal = proposeColumns(building, storey, config);
+    expect(proposal.columns.length).toBeGreaterThan(4);
+    expect(proposal.grid.ys[0]).toBeCloseTo(0.15, 6);
+    for (const c of proposal.columns) expect(pointInRing(c.at, building.structure.footprint)).toBe(true);
+  });
+
+  it("fills an L-shaped outline only where the building is", () => {
+    let p = createProject();
+    const id = p.site.buildings[0].id;
+    p = setFootprint(p, id, [
+      { x: 0, y: 0 },
+      { x: 18, y: 0 },
+      { x: 18, y: 8 },
+      { x: 8, y: 8 },
+      { x: 8, y: 16 },
+      { x: 0, y: 16 },
+    ]);
+    const b = p.site.buildings[0];
+    const proposal = proposeColumns(b, b.storeys[0], config);
+    expect(proposal.grid.xs).toContain(7.85);
+    expect(proposal.grid.ys).toContain(7.85);
+    expectFullGrid(proposal, b.structure.footprint);
+    expect(proposal.columns.some((c) => c.at.x > 9 && c.at.y > 9)).toBe(false);
   });
 
   it("is empty without an outline", () => {
     const p = createProject();
     const b = p.site.buildings[0];
-    expect(proposeColumns(b, b.storeys[0], config)).toEqual([]);
+    expect(proposeColumns(b, b.storeys[0], config)).toEqual({ grid: { xs: [], ys: [] }, columns: [] });
+  });
+});
+
+describe("column axes", () => {
+  it("are kept with the columns, saved, and go with the last column", () => {
+    let p = block(20, 14);
+    const id = p.site.buildings[0].id;
+    const grid = { xs: [0.15, 6, 12], ys: [0.15, 6] };
+    p = setColumns(p, id, [{ at: { x: 6, y: 6 }, w: 0.3, d: 0.3 }], grid);
+    expect(p.site.buildings[0].structure.columnGrid).toEqual(grid);
+    const back = parseProject(serializeProject(p));
+    expect(back.site.buildings[0].structure.columnGrid).toEqual(grid);
+    const only = p.site.buildings[0].structure.columns![0].id;
+    expect(removeColumn(p, id, only).site.buildings[0].structure.columnGrid).toBeUndefined();
+    expect(setColumns(p, id, []).site.buildings[0].structure.columnGrid).toBeUndefined();
   });
 });
 

@@ -1,9 +1,8 @@
 {
   "_status": "TO BE VERIFIED BY A LICENSED ENGINEER. These are starting values for a first column grid, not the result of a structural calculation.",
-  "_doc": "width / depth: size of a proposed column in metres, along x and along y of the plan. maxSpan: the largest distance between two columns along one structural wall line; longer stretches get columns in between, evenly spaced. mergeDistance: columns proposed closer than this to one already placed are left out. doorClearance: how far (metres) a column put in between may be shifted along its wall to stay clear of a door or window.",
+  "_doc": "The columns stand on a regular grid of axes, one at every crossing inside the building. width / depth: size of a column in metres, along x and along y of the plan. maxSpan: the largest distance between two neighbouring axes; a longer one is divided evenly by axes in between. minSpan: the smallest distance between two neighbouring axes; an axis wanted closer than this to one already taken is dropped.",
   "width": 0.3,
   "depth": 0.3,
   "maxSpan": 6,
-  "mergeDistance": 0.8,
-  "doorClearance": 1.5
+  "minSpan": 3
 }

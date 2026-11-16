@@ -137,6 +137,15 @@ export interface Column {
   d: number;
 }
 
+/**
+ * The axes the columns stand on: x of every line along y, and y of every line
+ * along x, each list in increasing order. A column stands at their crossings.
+ */
+export interface ColumnGrid {
+  xs: number[];
+  ys: number[];
+}
+
 export type BalconyKind = "balcony" | "loggia";
 
 /**
@@ -223,6 +232,8 @@ export interface Structure {
   core: CoreElement[];
   /** Columns, the same on every storey. Absent or empty when there are none. */
   columns?: Column[];
+  /** The axes the columns were placed on; absent when they were not placed on a grid. */
+  columnGrid?: ColumnGrid;
   /** Balconies and loggias of the storeys above the ground floor. Absent when there are none. */
   balconies?: Balcony[];
 }

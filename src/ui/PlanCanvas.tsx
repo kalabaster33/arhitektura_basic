@@ -62,6 +62,7 @@ import {
   setErkerEdge,
 } from "../core/structure.ts";
 import type { Face } from "../core/topology.ts";
+import { axisLetter } from "../core/columns.ts";
 
 export type Tool =
   | "select"
@@ -143,6 +144,8 @@ interface Props {
   outline: Pt[];
   /** Outline of the storeys above, shown on the ground floor where they project; null when they do not. */
   erkerOutline: Pt[] | null;
+  /** The column axes, drawn across the building with their names; null to hide them. */
+  columnGrid?: { xs: number[]; ys: number[]; min: Pt; max: Pt } | null;
   /** Balconies and loggias of the storeys above, drawn dashed on the ground floor. */
   balconyOutlines?: Pt[][];
   /** Centre of mass and centre of stiffness of the storey, marked on the plan; null to hide them. */
@@ -938,6 +941,52 @@ export function PlanCanvas(props: Props) {
             />
           );
         })}
+
+        {props.columnGrid && (() => {
+          const g = props.columnGrid;
+          const reach = 1.2 + 14 * px;
+          const r = 9 * px;
+          const bubble = (key: string, x: number, y: number, label: string) => (
+            <g key={key}>
+              <circle cx={x} cy={y} r={r} strokeWidth={1 * px} />
+              <text x={x} y={y} fontSize={10 * px} dy={3.5 * px}>
+                {label}
+              </text>
+            </g>
+          );
+          return (
+            <g className="column-axes" pointerEvents="none">
+              {g.xs.map((x, i) => (
+                <g key={`x${i}`}>
+                  <line
+                    x1={x}
+                    y1={g.min.y - reach + r}
+                    x2={x}
+                    y2={g.max.y + reach - r}
+                    strokeWidth={0.8 * px}
+                    strokeDasharray={`${10 * px} ${3 * px} ${2 * px} ${3 * px}`}
+                  />
+                  {bubble("a", x, g.min.y - reach, String(i + 1))}
+                  {bubble("b", x, g.max.y + reach, String(i + 1))}
+                </g>
+              ))}
+              {g.ys.map((y, i) => (
+                <g key={`y${i}`}>
+                  <line
+                    x1={g.min.x - reach + r}
+                    y1={y}
+                    x2={g.max.x + reach - r}
+                    y2={y}
+                    strokeWidth={0.8 * px}
+                    strokeDasharray={`${10 * px} ${3 * px} ${2 * px} ${3 * px}`}
+                  />
+                  {bubble("a", g.min.x - reach, y, axisLetter(i))}
+                  {bubble("b", g.max.x + reach, y, axisLetter(i))}
+                </g>
+              ))}
+            </g>
+          );
+        })()}
 
         {props.underlay.map((w) => (
           <line

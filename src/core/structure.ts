@@ -26,6 +26,7 @@ import {
   type Balcony,
   type Building,
   type Column,
+  type ColumnGrid,
   type CoreElement,
   type Opening,
   type CoreKind,
@@ -641,12 +642,14 @@ export function setColumns(
   project: Project,
   buildingId: string,
   columns: { at: Pt; w: number; d: number }[],
+  grid?: ColumnGrid,
 ): Project {
   if (!structureOf(project, buildingId)) return project;
   const clean: Column[] = columns
     .filter((c) => c.w > 0 && c.d > 0 && Number.isFinite(c.at.x) && Number.isFinite(c.at.y))
     .map((c) => ({ id: newId("column"), at: roundPt(c.at), w: round(c.w), d: round(c.d) }));
-  return withStructure(project, buildingId, { columns: clean.length ? clean : undefined });
+  const axes = clean.length && grid ? { xs: grid.xs.map(round), ys: grid.ys.map(round) } : undefined;
+  return withStructure(project, buildingId, { columns: clean.length ? clean : undefined, columnGrid: axes });
 }
 
 /** Removes one column from every storey. */
@@ -654,7 +657,10 @@ export function removeColumn(project: Project, buildingId: string, id: string): 
   const structure = structureOf(project, buildingId);
   if (!structure?.columns?.some((c) => c.id === id)) return project;
   const rest = structure.columns.filter((c) => c.id !== id);
-  return withStructure(project, buildingId, { columns: rest.length ? rest : undefined });
+  return withStructure(project, buildingId, {
+    columns: rest.length ? rest : undefined,
+    columnGrid: rest.length ? structure.columnGrid : undefined,
+  });
 }
 
 /** Adds a balcony or loggia to every storey above the ground floor; with the reason when it does not fit. */

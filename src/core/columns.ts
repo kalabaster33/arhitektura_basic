@@ -1,17 +1,23 @@
 /**
- * A first column grid for a building, proposed from the plan of one storey.
+ * A column grid for a building, proposed from the plan of one storey.
  *
- * The walls that carry the building are taken to be the ones that separate
- * things: the outside walls, the walls of the hall, stairs and elevator, and
- * every wall between two apartments or between an apartment and the hall or
- * corridor. Walls inside one apartment are left out; they can move from floor
- * to floor. A column goes where these walls meet (a corner, a T or a cross)
- * and, along a long straight wall, in between, so that no two neighbours on
- * one line are further apart than the largest span. Columns put in between
- * are shifted along their wall to stay clear of doors and windows.
+ * Columns stand on a regular grid of axes: lines along y (the x axes) and
+ * lines along x (the y axes), with a column at every crossing that lies in the
+ * building. So from every column there is another one along x and along y,
+ * one span away, and no span is longer than the largest span.
  *
- * Only places inside the ground floor outline are kept, so every column
- * stands on the ground. The sizes and spans come from src/config/columns.json.
+ * Where the axes go is read from the walls that carry the building: the
+ * outline of the ground floor first (the outer axes, with the columns flush
+ * with the outside face), then the walls of the hall, stairs and elevator,
+ * then the walls between two apartments or between an apartment and the hall
+ * or corridor, the longest first. Walls inside one apartment are left out;
+ * they can move from floor to floor. An axis closer to one already taken than
+ * the shortest span is dropped, and a span longer than the largest span is
+ * divided evenly by axes in between.
+ *
+ * Crossings inside the stairs or the elevator get no column; every other
+ * crossing inside the ground floor outline does, so every column stands on
+ * the ground. Sizes and spans come from src/config/columns.json.
  * Pure functions, no UI imports.
  */
 import {
@@ -21,32 +27,39 @@ import {
   distToSegment,
   lerp,
   lineIntersectionParams,
-  offsetRingLeft,
   pointInPolygon,
   pointInRing,
   projectParam,
 } from "./geometry.ts";
-import type { Building, Storey, Wall } from "./model.ts";
-import { columnSpansOnWall } from "./openings.ts";
+import type { Building, ColumnGrid, Storey, Wall } from "./model.ts";
 import { linkSpaces } from "./spaces.ts";
+import { coreRect } from "./structure.ts";
 
 export interface ColumnConfig {
   width: number;
   depth: number;
+  /** Largest distance between two neighbouring axes. */
   maxSpan: number;
-  mergeDistance: number;
-  doorClearance: number;
+  /** Smallest distance between two neighbouring axes. */
+  minSpan: number;
 }
 
 export function parseColumnConfig(raw: unknown): ColumnConfig {
   const c = raw as Partial<ColumnConfig> | null;
   const out = {} as ColumnConfig;
-  for (const key of ["width", "depth", "maxSpan", "mergeDistance", "doorClearance"] as const) {
+  for (const key of ["width", "depth", "maxSpan", "minSpan"] as const) {
     const v = c?.[key];
-    const ok = typeof v === "number" && Number.isFinite(v) && (key === "doorClearance" ? v >= 0 : v > 0);
-    if (!ok) throw new Error(`Columns: invalid or missing "${key}".`);
+    if (typeof v !== "number" || !Number.isFinite(v) || !(v > 0)) throw new Error(`Columns: invalid or missing "${key}".`);
     out[key] = v;
   }
+  if (out.minSpan > out.maxSpan) throw new Error('Columns: "minSpan" is larger than "maxSpan".');
+  return out;
+}
+
+/** Name of an axis along x: "A".."Z", then "AA", "AB".. Axes along y are numbered 1, 2, 3.. */
+export function axisLetter(i: number): string {
+  let out = "";
+  for (let n = i + 1; n > 0; n = Math.floor((n - 1) / 26)) out = String.fromCharCode(65 + ((n - 1) % 26)) + out;
   return out;
 }
 
@@ -57,9 +70,16 @@ export interface ProposedColumn {
   d: number;
 }
 
+export interface ColumnProposal {
+  grid: ColumnGrid;
+  columns: ProposedColumn[];
+}
+
 const round = (v: number) => Math.round(v * 1e6) / 1e6;
 /** How far off a wall centreline its two sides are probed. */
 const SIDE_PROBE = 0.01;
+/** A wall at most this far off square counts as running along x or along y. */
+const SQUARE = 1e-6;
 
 /** Every distance along a wall (0 to 1) where another wall ends on it or crosses it. */
 function cutParams(wall: Wall, walls: Wall[]): number[] {
@@ -78,25 +98,69 @@ function cutParams(wall: Wall, walls: Wall[]): number[] {
   return sorted.filter((t, i) => i === 0 || (t - sorted[i - 1]) * len > NODE_TOL);
 }
 
-/** One stretch of a wall line that carries the building. */
-interface Run {
-  a: Pt;
-  b: Pt;
-  /** The real wall it lies on; null for the ground floor outline drawn on an upper storey. */
-  wall: Wall | null;
+/** Where an axis might go: its coordinate, how strongly it is wanted, and how long a wall asks for it. */
+interface Candidate {
+  at: number;
+  /** 3 the outline, 2 the core, 1 a wall between apartments. */
+  rank: number;
+  length: number;
 }
 
 /**
- * Proposes columns for the building from the walls of one storey. The result
- * is ordered: outline corners first, then wall junctions, then the columns in
- * between. Empty when the building has no outline.
+ * The axes along one direction: the outline axes always, then the others
+ * strongest first where they keep the shortest span, then axes in between
+ * where a span is longer than the largest.
  */
-export function proposeColumns(building: Building, storey: Storey, config: ColumnConfig): ProposedColumn[] {
+function chooseAxes(candidates: Candidate[], config: ColumnConfig): number[] {
+  // Walls on one line add up: the line is wanted as strongly as its strongest wall, as long as all of them.
+  const lines = new Map<number, Candidate>();
+  for (const c of candidates) {
+    const key = Math.round(c.at / 1e-3);
+    const seen = lines.get(key);
+    lines.set(key, seen ? { at: seen.at, rank: Math.max(seen.rank, c.rank), length: seen.length + c.length } : { ...c });
+  }
+  const sorted = [...lines.values()].sort((p, q) => q.rank - p.rank || q.length - p.length);
+  const taken: number[] = [];
+  for (const c of sorted) {
+    const near = taken.some((t) => Math.abs(t - c.at) < (c.rank === 3 ? 1e-6 : config.minSpan - 1e-6));
+    if (!near) taken.push(round(c.at));
+  }
+  taken.sort((p, q) => p - q);
+  const axes: number[] = [];
+  taken.forEach((t, i) => {
+    if (i > 0) {
+      const gap = t - taken[i - 1];
+      const parts = Math.ceil(gap / config.maxSpan - 1e-9);
+      for (let k = 1; k < parts; k++) axes.push(round(taken[i - 1] + (gap * k) / parts));
+    }
+    axes.push(t);
+  });
+  return axes;
+}
+
+/**
+ * Proposes the column grid for the building from the walls of one storey.
+ * Empty when the building has no outline.
+ */
+export function proposeColumns(building: Building, storey: Storey, config: ColumnConfig): ColumnProposal {
   const { structure } = building;
   const footprint = structure.footprint;
-  if (footprint.length < 3) return [];
-  const half = structure.wallThickness / 2;
-  const groundCentre = offsetRingLeft(footprint, footprint.map(() => half));
+  if (footprint.length < 3) return { grid: { xs: [], ys: [] }, columns: [] };
+
+  const xs: Candidate[] = [];
+  const ys: Candidate[] = [];
+
+  // The outline: an axis half a column in from every side running along x or
+  // y, so the columns there are flush with the outside face.
+  footprint.forEach((a, i) => {
+    const b = footprint[(i + 1) % footprint.length];
+    const len = dist(a, b);
+    if (len < NODE_TOL) return;
+    // The footprint has its interior on the left.
+    const n = { x: -(b.y - a.y) / len, y: (b.x - a.x) / len };
+    if (Math.abs(b.x - a.x) <= SQUARE * len) xs.push({ at: a.x + n.x * (config.width / 2), rank: 3, length: len });
+    else if (Math.abs(b.y - a.y) <= SQUARE * len) ys.push({ at: a.y + n.y * (config.depth / 2), rank: 3, length: len });
+  });
 
   // Who is on each side of a wall: an apartment, a shared room, or outdoors.
   const linked = linkSpaces(storey);
@@ -110,148 +174,60 @@ export function proposeColumns(building: Building, storey: Storey, config: Colum
     return "outdoors";
   };
 
-  // The ground floor outline counts as a carrying line on every storey, so an
-  // upper storey with an erker still gets the columns that stand below it.
-  const pseudo: Wall[] = groundCentre.map((a, i) => ({
-    id: `ground:${i}`,
-    a,
-    b: groundCentre[(i + 1) % groundCentre.length],
-    thickness: structure.wallThickness,
-    kind: "exterior",
-    part: "shell",
-  }));
-  // Railings carry nothing; the rest of the walls are sorted out below.
-  const lines = [...storey.walls.filter((w) => w.part !== "balcony"), ...pseudo].filter((w) => dist(w.a, w.b) > NODE_TOL);
-  const real = new Set(storey.walls.map((w) => w.id));
-
-  const runs: Run[] = [];
-  for (const wall of lines) {
-    const ts = cutParams(wall, lines);
+  // The core and the walls between apartments. Railings carry nothing, and the
+  // outside walls of the storey are stood in for by the ground floor outline.
+  const walls = storey.walls.filter((w) => w.part !== "balcony" && dist(w.a, w.b) > NODE_TOL);
+  for (const wall of walls) {
+    if (wall.part === "shell") continue;
     const len = dist(wall.a, wall.b);
-    const n = { x: -(wall.b.y - wall.a.y) / len, y: (wall.b.x - wall.a.x) / len };
-    let open: { from: number; to: number } | null = null;
-    const close = () => {
-      if (open) runs.push({ a: lerp(wall.a, wall.b, open.from), b: lerp(wall.a, wall.b, open.to), wall: real.has(wall.id) ? wall : null });
-      open = null;
-    };
-    for (let i = 0; i + 1 < ts.length; i++) {
-      const m = lerp(wall.a, wall.b, (ts[i] + ts[i + 1]) / 2);
-      const left = ownerAt({ x: m.x + n.x * SIDE_PROBE, y: m.y + n.y * SIDE_PROBE });
-      const right = ownerAt({ x: m.x - n.x * SIDE_PROBE, y: m.y - n.y * SIDE_PROBE });
-      const carries = wall.part !== undefined || left !== right;
-      if (!carries) close();
-      else if (open) open.to = ts[i + 1];
-      else open = { from: ts[i], to: ts[i + 1] };
-    }
-    close();
-  }
-
-  // Junctions: where carrying lines meet other than straight on.
-  const nodes = new Map<string, { p: Pt; dirs: Set<string> }>();
-  const key = (p: Pt) => `${Math.round(p.x / 0.01)},${Math.round(p.y / 0.01)}`;
-  const touch = (p: Pt, toward: Pt) => {
-    const k = key(p);
-    const node = nodes.get(k) ?? { p, dirs: new Set<string>() };
-    const angle = Math.round((Math.atan2(toward.y - p.y, toward.x - p.x) * 180) / Math.PI) % 360;
-    node.dirs.add(String((angle + 360) % 360));
-    nodes.set(k, node);
-  };
-  for (const r of runs) {
-    // Both ends of every run; a run that ends partway along another one makes a T there.
-    touch(r.a, r.b);
-    touch(r.b, r.a);
-  }
-  for (const r of runs) {
-    for (const node of nodes.values()) {
-      if (dist(node.p, r.a) <= NODE_TOL || dist(node.p, r.b) <= NODE_TOL) continue;
-      if (distToSegment(node.p, r.a, r.b) <= NODE_TOL) {
-        touch(node.p, r.a);
-        touch(node.p, r.b);
+    const alongY = Math.abs(wall.b.x - wall.a.x) <= SQUARE * len;
+    const alongX = Math.abs(wall.b.y - wall.a.y) <= SQUARE * len;
+    if (!alongX && !alongY) continue;
+    let carried = 0;
+    if (wall.part === "core") carried = len;
+    else {
+      const ts = cutParams(wall, walls);
+      const n = { x: -(wall.b.y - wall.a.y) / len, y: (wall.b.x - wall.a.x) / len };
+      for (let i = 0; i + 1 < ts.length; i++) {
+        const m = lerp(wall.a, wall.b, (ts[i] + ts[i + 1]) / 2);
+        const left = ownerAt({ x: m.x + n.x * SIDE_PROBE, y: m.y + n.y * SIDE_PROBE });
+        const right = ownerAt({ x: m.x - n.x * SIDE_PROBE, y: m.y - n.y * SIDE_PROBE });
+        if (left !== right) carried += (ts[i + 1] - ts[i]) * len;
       }
     }
-  }
-  const junctions: Pt[] = [];
-  for (const { p, dirs } of nodes.values()) {
-    const angles = [...dirs].map(Number);
-    const straight = angles.length === 2 && Math.abs(Math.abs(angles[0] - angles[1]) - 180) <= 1;
-    if (!straight) junctions.push(p);
+    if (carried <= NODE_TOL) continue;
+    const c = { rank: wall.part === "core" ? 2 : 1, length: carried };
+    if (alongY) xs.push({ ...c, at: wall.a.x });
+    else ys.push({ ...c, at: wall.a.y });
   }
 
-  const inside = (p: Pt) => pointInRing(p, footprint);
-  const kept: Pt[] = [];
-  const keep = (p: Pt) => {
-    if (!inside(p) || kept.some((q) => dist(p, q) < config.mergeDistance)) return;
-    kept.push({ x: round(p.x), y: round(p.y) });
-  };
-  groundCentre.forEach(keep);
-  junctions.forEach(keep);
+  const grid = { xs: chooseAxes(xs, config), ys: chooseAxes(ys, config) };
 
-  // In between: no two neighbours on one carrying line further apart than the span.
-  const extra: Pt[] = [];
-  for (const r of runs) {
-    const len = dist(r.a, r.b);
-    if (len <= config.maxSpan) continue;
-    const on = [...kept, ...extra]
-      .filter((p) => distToSegment(p, r.a, r.b) <= Math.max(config.width, config.depth) / 2)
-      .map((p) => projectParam(p, r.a, r.b) * len)
-      .filter((s) => s >= -1e-6 && s <= len + 1e-6)
-      .sort((p, q) => p - q);
-    for (let i = 0; i + 1 < on.length; i++) {
-      const gap = on[i + 1] - on[i];
-      const parts = Math.ceil(gap / config.maxSpan - 1e-9);
-      for (let k = 1; k < parts; k++) {
-        const s = clearOfOpenings(storey, r, on[i] + (gap * k) / parts, on[i], on[i + 1], config);
-        extra.push(lerp(r.a, r.b, s / len));
-      }
+  // A column at every crossing in the building, except in the stairs and the elevator.
+  const shafts = structure.core
+    .filter((c) => c.kind !== "hall")
+    .map((c) => {
+      const { min, max } = coreRect(c);
+      const inset = structure.coreWallThickness / 2 + 1e-6;
+      return { min: { x: min.x + inset, y: min.y + inset }, max: { x: max.x - inset, y: max.y - inset } };
+    });
+  const columns: ProposedColumn[] = [];
+  for (const x of grid.xs) {
+    for (const y of grid.ys) {
+      const at = { x, y };
+      if (!fitsInside(at, config, footprint)) continue;
+      if (shafts.some((s) => x > s.min.x && x < s.max.x && y > s.min.y && y < s.max.y)) continue;
+      columns.push({ at, w: config.width, d: config.depth });
     }
   }
-  extra.forEach(keep);
-
-  return kept.map((at) => ({ at: settleInside(at, config, footprint), w: config.width, d: config.depth }));
+  return { grid, columns };
 }
 
-/**
- * A place near `s` (a distance along the run) where a column does not stand in
- * a door or window of the run's wall, staying between its two neighbours.
- */
-function clearOfOpenings(storey: Storey, run: Run, s: number, lo: number, hi: number, config: ColumnConfig): number {
-  const wall = run.wall;
-  if (!wall) return s;
-  const openings = storey.openings.filter((o) => o.wallId === wall.id);
-  if (openings.length === 0) return s;
-  const len = dist(run.a, run.b);
-  const free = (t: number): boolean => {
-    const at = lerp(run.a, run.b, t / len);
-    const spans = columnSpansOnWall(wall, [{ id: "probe", at, w: config.width, d: config.depth }]);
-    return !spans.some(([a, b]) => openings.some((o) => a < o.offset + o.width / 2 && b > o.offset - o.width / 2));
-  };
-  const margin = Math.min(config.mergeDistance, (hi - lo) / 4);
-  for (let shift = 0; shift <= config.doorClearance + 1e-9; shift += 0.05) {
-    for (const t of shift === 0 ? [s] : [s + shift, s - shift]) {
-      if (t > lo + margin && t < hi - margin && free(t)) return t;
-    }
-  }
-  return s;
-}
-
-/** Moves a column inward until it no longer sticks out of the outline. */
-function settleInside(at: Pt, config: ColumnConfig, outline: Pt[]): Pt {
-  let p = { ...at };
-  // Corners probed a hair inside, so a column flush with the outside face counts as inside.
+/** True when the whole column lies inside the outline (flush with its face counts). */
+function fitsInside(at: Pt, config: ColumnConfig, outline: Pt[]): boolean {
   const hw = config.width / 2 - 1e-4;
   const hd = config.depth / 2 - 1e-4;
-  const step = 0.005;
-  for (let i = 0; i < 200; i++) {
-    let dx = 0;
-    let dy = 0;
-    for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
-      if (!pointInRing({ x: p.x + sx * hw, y: p.y + sy * hd }, outline)) {
-        dx -= sx;
-        dy -= sy;
-      }
-    }
-    if (dx === 0 && dy === 0) break;
-    p = { x: p.x + Math.sign(dx) * step, y: p.y + Math.sign(dy) * step };
-  }
-  return { x: round(p.x), y: round(p.y) };
+  return [[-1, -1], [1, -1], [1, 1], [-1, 1]].every(([sx, sy]) =>
+    pointInRing({ x: at.x + sx * hw, y: at.y + sy * hd }, outline),
+  );
 }

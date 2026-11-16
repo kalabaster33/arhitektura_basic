@@ -2,7 +2,7 @@ import { useState } from "react";
 import { type AreaConfig, formatArea } from "../core/areas.ts";
 import { type BalconyConfig, type BalconyIssue, balconyLabel } from "../core/balconies.ts";
 import type { BearingResult } from "../core/bearing.ts";
-import { type ColumnConfig, proposeColumns } from "../core/columns.ts";
+import { type ColumnConfig, axisLetter, proposeColumns } from "../core/columns.ts";
 import { formatLatLon } from "../core/geo.ts";
 import {
   type Balcony,
@@ -506,9 +506,17 @@ export function CorePanel(props: {
   );
 }
 
+/** The spans between neighbouring axes, e.g. "6.00 · 5.40 · 6.00". */
+const spans = (axes: number[]) =>
+  axes
+    .slice(1)
+    .map((v, i) => (v - axes[i]).toFixed(2))
+    .join(" · ");
+
 /**
- * Columns: a grid proposed from the walls between the apartments of one
- * storey, the same on every storey. Doors and windows are kept clear of them.
+ * Columns: a regular grid of axes read from the walls between the apartments
+ * of one storey, the core and the outline, with a column at every crossing in
+ * the building; the same on every storey. Doors and windows are kept clear.
  */
 export function ColumnsPanel(props: {
   project: Project;
@@ -522,25 +530,32 @@ export function ColumnsPanel(props: {
   const { project, buildingId, storey } = props;
   const building = project.site.buildings.find((b) => b.id === buildingId)!;
   const count = building.structure.columns?.length ?? 0;
+  const grid = building.structure.columnGrid;
   const [width, setWidth] = useState(props.config.width);
   const [depth, setDepth] = useState(props.config.depth);
+  const [minSpan, setMinSpan] = useState(props.config.minSpan);
   const [maxSpan, setMaxSpan] = useState(props.config.maxSpan);
   const [note, setNote] = useState<string | null>(null);
 
   const propose = () => {
-    const proposed = proposeColumns(building, storey, { ...props.config, width, depth, maxSpan });
-    if (proposed.length === 0) {
+    if (minSpan > maxSpan) {
+      setNote("The shortest span is longer than the largest span.");
+      return;
+    }
+    const { grid, columns } = proposeColumns(building, storey, { width, depth, minSpan, maxSpan });
+    if (columns.length === 0) {
       setNote("No columns could be placed: draw the building outline first.");
       return;
     }
     const doorsBefore = building.storeys.reduce((n, s) => n + s.openings.length, 0);
-    const next = setColumns(project, buildingId, proposed);
+    const next = setColumns(project, buildingId, columns, grid);
     const doorsAfter = next.site.buildings.find((b) => b.id === buildingId)!.storeys.reduce((n, s) => n + s.openings.length, 0);
     const lost = doorsBefore - doorsAfter;
+    const placed = `${columns.length} columns on ${grid.xs.length} × ${grid.ys.length} axes.`;
     setNote(
       lost > 0
-        ? `${proposed.length} columns placed. ${lost} door${lost > 1 ? "s or windows" : " or window"} had no room left beside a column and ${lost > 1 ? "were" : "was"} removed.`
-        : `${proposed.length} columns placed on every storey.`,
+        ? `${placed} ${lost} door${lost > 1 ? "s or windows" : " or window"} had no room left beside a column and ${lost > 1 ? "were" : "was"} removed.`
+        : placed,
     );
     props.onChange(next);
   };
@@ -551,14 +566,34 @@ export function ColumnsPanel(props: {
 
   return (
     <section className="panel">
-      <h2>Columns</h2>
+      <h2>
+        Columns <small>{count > 0 ? `${count}` : "none"}</small>
+      </h2>
       <p className="hint">
-        {count > 0 ? `${count} columns, the same on every storey.` : "No columns yet."} The grid is read from the
-        walls between the apartments of {storey.name}, the outside walls and the core.
+        The columns stand on a grid of axes, one at every crossing in the building (none in the stairs or the
+        elevator), the same on every storey. The axes are read from the outline, the core and the walls between the
+        apartments of {storey.name}.
       </p>
-      <LengthField label="Column width (x)" value={width} min={0.05} onCommit={setWidth} />
-      <LengthField label="Column depth (y)" value={depth} min={0.05} onCommit={setDepth} />
-      <LengthField label="Largest span" value={maxSpan} min={1} onCommit={setMaxSpan} />
+      {grid && count > 0 && (
+        <table className="figures">
+          <tbody>
+            <tr>
+              <th>Axes 1–{grid.xs.length} (along x)</th>
+              <td>{spans(grid.xs) || "—"} m</td>
+            </tr>
+            <tr>
+              <th>Axes A–{axisLetter(grid.ys.length - 1)} (along y)</th>
+              <td>{spans(grid.ys) || "—"} m</td>
+            </tr>
+          </tbody>
+        </table>
+      )}
+      <div className="field-grid">
+        <LengthField label="Column width (x)" value={width} min={0.05} onCommit={setWidth} />
+        <LengthField label="Column depth (y)" value={depth} min={0.05} onCommit={setDepth} />
+        <LengthField label="Shortest span" value={minSpan} min={0.5} onCommit={setMinSpan} />
+        <LengthField label="Largest span" value={maxSpan} min={1} onCommit={setMaxSpan} />
+      </div>
       <button className="is-active" disabled={props.disabled} onClick={propose}>
         {count > 0 ? "Propose the grid again" : "Propose columns"}
       </button>{" "}
@@ -569,7 +604,8 @@ export function ColumnsPanel(props: {
       )}
       {note && <p className="hint">{note}</p>}
       <p className="hint hint--warn">
-        A first grid to work from, not a structural design — to be verified by a licensed engineer.
+        A first grid to work from, not a structural design — to be verified by a licensed engineer
+        (src/config/columns.json).
       </p>
     </section>
   );

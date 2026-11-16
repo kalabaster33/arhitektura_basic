@@ -952,6 +952,21 @@ export function App() {
                 ? { mass: bearing.centreOfMass, stiffness: bearing.centreOfStiffness, bad: bearing.problems.length > 0 }
                 : null
             }
+            columnGrid={
+              structure.columnGrid && storey.columns?.length && hasOutline
+                ? {
+                    ...structure.columnGrid,
+                    min: {
+                      x: Math.min(...structure.footprint.map((p) => p.x)),
+                      y: Math.min(...structure.footprint.map((p) => p.y)),
+                    },
+                    max: {
+                      x: Math.max(...structure.footprint.map((p) => p.x)),
+                      y: Math.max(...structure.footprint.map((p) => p.y)),
+                    },
+                  }
+                : null
+            }
             balconyOutlines={
               hasOutline && isGroundStorey(building, storey.id)
                 ? placeableBalconies(structure).map((b) => balconyOutline(structure, b))

@@ -1686,3 +1686,19 @@ input.is-invalid {
   text-align: left;
   font-weight: normal;
 }
+
+.column-axes line {
+  stroke: #b3261e;
+  opacity: 0.6;
+}
+
+.column-axes circle {
+  fill: var(--panel, #fff);
+  stroke: #b3261e;
+}
+
+.column-axes text {
+  fill: #b3261e;
+  text-anchor: middle;
+  font-weight: 600;
+}

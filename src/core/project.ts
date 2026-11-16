@@ -213,6 +213,7 @@ function cleanStructure(raw: any): Structure {
       )
       .map((c: any) => ({ id: c.id, kind: c.kind, a: { x: c.a.x, y: c.a.y }, b: { x: c.b.x, y: c.b.y } })),
     ...cleanColumns(raw?.columns),
+    ...(Array.isArray(raw?.columns) && raw.columns.length ? cleanColumnGrid(raw?.columnGrid) : {}),
     ...cleanBalconies(raw?.balconies),
   };
 }
@@ -247,6 +248,17 @@ function cleanColumns(raw: unknown): { columns?: Column[] } {
     .filter((c: any) => typeof c?.id === "string" && isPt(c.at) && c.w > 0 && c.d > 0 && Number.isFinite(c.w + c.d))
     .map((c: any) => ({ id: c.id, at: { x: c.at.x, y: c.at.y }, w: c.w, d: c.d }));
   return columns.length ? { columns } : {};
+}
+
+/** Column axes read from a file; nothing when they cannot be read. */
+function cleanColumnGrid(raw: any): { columnGrid?: { xs: number[]; ys: number[] } } {
+  const list = (v: unknown) =>
+    Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === "number" && Number.isFinite(x))
+      ? (v as number[]).slice().sort((p, q) => p - q)
+      : null;
+  const xs = list(raw?.xs);
+  const ys = list(raw?.ys);
+  return xs && ys ? { columnGrid: { xs, ys } } : {};
 }
 
 /** Parses a saved project; throws a readable error when the file cannot be used. */
